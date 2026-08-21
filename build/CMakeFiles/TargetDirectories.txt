@@ -1,0 +1,5 @@
+/home/dyj/project/Parking/build/CMakeFiles/parking_lib.dir
+/home/dyj/project/Parking/build/CMakeFiles/parking.dir
+/home/dyj/project/Parking/build/CMakeFiles/test_camera.dir
+/home/dyj/project/Parking/build/CMakeFiles/edit_cache.dir
+/home/dyj/project/Parking/build/CMakeFiles/rebuild_cache.dir
