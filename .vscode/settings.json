@@ -1,0 +1,9 @@
+{
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build-rk3576/compile_commands.json",
+    "C_Cpp.default.compilerPath": "/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-arm64",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build-rk3576",
+        "--query-driver=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-*"
+    ]
+}

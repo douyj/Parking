@@ -1,0 +1,6 @@
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/parking_lib.dir
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/plate_recognizer_lib.dir
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/parking.dir
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/test_recognizer.dir
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/edit_cache.dir
+/home/dyj/project/Parking/build-rk3576/CMakeFiles/rebuild_cache.dir

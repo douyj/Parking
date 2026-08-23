@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "camera_v2.h"
+#include "camera.h"
 
 
 
