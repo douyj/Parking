@@ -89,7 +89,7 @@ cmake --build build-rk3576 -j4
 
 - `include/plate_recognizer.h`
 - `include/rknn_api.h`
-- `src/recongizer/plate_recognizer.cpp`
+- `src/recognizer/plate_recognizer.cpp`
 - `tests/test_recognizer.cpp`
 - `third_party/stb_image.h`
 - `third_party/stb_image_write.h`
@@ -382,4 +382,3 @@ git checkout -- .
 3. 检查 `CMakeLists.txt`、`camera.h/camera.c` 和 `test_camera.c`。
 4. 从“恢复 `test_camera` 构建目标 + 板端确认摄像头 FOURCC”开始。
 5. 以“摄像头单帧 -> BGR888 -> RKNN 识别”为下一个实现目标。
-

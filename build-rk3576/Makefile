@@ -240,29 +240,125 @@ src/main.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking.dir/build.make CMakeFiles/parking.dir/src/main.c.s
 .PHONY : src/main.c.s
 
-src/recongizer/plate_recognizer.o: src/recongizer/plate_recognizer.cpp.o
-.PHONY : src/recongizer/plate_recognizer.o
+src/recognizer/plate_postprocess.o: src/recognizer/plate_postprocess.cpp.o
+.PHONY : src/recognizer/plate_postprocess.o
 
 # target to build an object file
-src/recongizer/plate_recognizer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o
-.PHONY : src/recongizer/plate_recognizer.cpp.o
+src/recognizer/plate_postprocess.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o
+.PHONY : src/recognizer/plate_postprocess.cpp.o
 
-src/recongizer/plate_recognizer.i: src/recongizer/plate_recognizer.cpp.i
-.PHONY : src/recongizer/plate_recognizer.i
+src/recognizer/plate_postprocess.i: src/recognizer/plate_postprocess.cpp.i
+.PHONY : src/recognizer/plate_postprocess.i
 
 # target to preprocess a source file
-src/recongizer/plate_recognizer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.i
-.PHONY : src/recongizer/plate_recognizer.cpp.i
+src/recognizer/plate_postprocess.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.i
+.PHONY : src/recognizer/plate_postprocess.cpp.i
 
-src/recongizer/plate_recognizer.s: src/recongizer/plate_recognizer.cpp.s
-.PHONY : src/recongizer/plate_recognizer.s
+src/recognizer/plate_postprocess.s: src/recognizer/plate_postprocess.cpp.s
+.PHONY : src/recognizer/plate_postprocess.s
 
 # target to generate assembly for a file
-src/recongizer/plate_recognizer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.s
-.PHONY : src/recongizer/plate_recognizer.cpp.s
+src/recognizer/plate_postprocess.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.s
+.PHONY : src/recognizer/plate_postprocess.cpp.s
+
+src/recognizer/plate_preprocess.o: src/recognizer/plate_preprocess.cpp.o
+.PHONY : src/recognizer/plate_preprocess.o
+
+# target to build an object file
+src/recognizer/plate_preprocess.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o
+.PHONY : src/recognizer/plate_preprocess.cpp.o
+
+src/recognizer/plate_preprocess.i: src/recognizer/plate_preprocess.cpp.i
+.PHONY : src/recognizer/plate_preprocess.i
+
+# target to preprocess a source file
+src/recognizer/plate_preprocess.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.i
+.PHONY : src/recognizer/plate_preprocess.cpp.i
+
+src/recognizer/plate_preprocess.s: src/recognizer/plate_preprocess.cpp.s
+.PHONY : src/recognizer/plate_preprocess.s
+
+# target to generate assembly for a file
+src/recognizer/plate_preprocess.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.s
+.PHONY : src/recognizer/plate_preprocess.cpp.s
+
+src/recognizer/plate_recognizer.o: src/recognizer/plate_recognizer.cpp.o
+.PHONY : src/recognizer/plate_recognizer.o
+
+# target to build an object file
+src/recognizer/plate_recognizer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o
+.PHONY : src/recognizer/plate_recognizer.cpp.o
+
+src/recognizer/plate_recognizer.i: src/recognizer/plate_recognizer.cpp.i
+.PHONY : src/recognizer/plate_recognizer.i
+
+# target to preprocess a source file
+src/recognizer/plate_recognizer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.i
+.PHONY : src/recognizer/plate_recognizer.cpp.i
+
+src/recognizer/plate_recognizer.s: src/recognizer/plate_recognizer.cpp.s
+.PHONY : src/recognizer/plate_recognizer.s
+
+# target to generate assembly for a file
+src/recognizer/plate_recognizer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.s
+.PHONY : src/recognizer/plate_recognizer.cpp.s
+
+src/recognizer/plate_visualizer.o: src/recognizer/plate_visualizer.cpp.o
+.PHONY : src/recognizer/plate_visualizer.o
+
+# target to build an object file
+src/recognizer/plate_visualizer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o
+.PHONY : src/recognizer/plate_visualizer.cpp.o
+
+src/recognizer/plate_visualizer.i: src/recognizer/plate_visualizer.cpp.i
+.PHONY : src/recognizer/plate_visualizer.i
+
+# target to preprocess a source file
+src/recognizer/plate_visualizer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.i
+.PHONY : src/recognizer/plate_visualizer.cpp.i
+
+src/recognizer/plate_visualizer.s: src/recognizer/plate_visualizer.cpp.s
+.PHONY : src/recognizer/plate_visualizer.s
+
+# target to generate assembly for a file
+src/recognizer/plate_visualizer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.s
+.PHONY : src/recognizer/plate_visualizer.cpp.s
+
+src/recognizer/rknn_model.o: src/recognizer/rknn_model.cpp.o
+.PHONY : src/recognizer/rknn_model.o
+
+# target to build an object file
+src/recognizer/rknn_model.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o
+.PHONY : src/recognizer/rknn_model.cpp.o
+
+src/recognizer/rknn_model.i: src/recognizer/rknn_model.cpp.i
+.PHONY : src/recognizer/rknn_model.i
+
+# target to preprocess a source file
+src/recognizer/rknn_model.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.i
+.PHONY : src/recognizer/rknn_model.cpp.i
+
+src/recognizer/rknn_model.s: src/recognizer/rknn_model.cpp.s
+.PHONY : src/recognizer/rknn_model.s
+
+# target to generate assembly for a file
+src/recognizer/rknn_model.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/plate_recognizer_lib.dir/build.make CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.s
+.PHONY : src/recognizer/rknn_model.cpp.s
 
 tests/test_recognizer.o: tests/test_recognizer.cpp.o
 .PHONY : tests/test_recognizer.o
@@ -309,9 +405,21 @@ help:
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
-	@echo "... src/recongizer/plate_recognizer.o"
-	@echo "... src/recongizer/plate_recognizer.i"
-	@echo "... src/recongizer/plate_recognizer.s"
+	@echo "... src/recognizer/plate_postprocess.o"
+	@echo "... src/recognizer/plate_postprocess.i"
+	@echo "... src/recognizer/plate_postprocess.s"
+	@echo "... src/recognizer/plate_preprocess.o"
+	@echo "... src/recognizer/plate_preprocess.i"
+	@echo "... src/recognizer/plate_preprocess.s"
+	@echo "... src/recognizer/plate_recognizer.o"
+	@echo "... src/recognizer/plate_recognizer.i"
+	@echo "... src/recognizer/plate_recognizer.s"
+	@echo "... src/recognizer/plate_visualizer.o"
+	@echo "... src/recognizer/plate_visualizer.i"
+	@echo "... src/recognizer/plate_visualizer.s"
+	@echo "... src/recognizer/rknn_model.o"
+	@echo "... src/recognizer/rknn_model.i"
+	@echo "... src/recognizer/rknn_model.s"
 	@echo "... tests/test_recognizer.o"
 	@echo "... tests/test_recognizer.i"
 	@echo "... tests/test_recognizer.s"

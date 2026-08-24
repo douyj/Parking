@@ -1,5 +1,5 @@
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: \
- /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp \
+CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_visualizer.cpp.o: \
+ /home/dyj/project/Parking/src/recongizer/plate_visualizer.cpp \
  /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/usr/include/stdc-predef.h \
  /home/dyj/project/Parking/src/recongizer/plate_recognizer_internal.h \
  /home/dyj/project/Parking/include/plate_recognizer.h \
@@ -304,6 +304,13 @@ CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: \
  /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/core/optim.hpp \
  /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/core/ovx.hpp \
  /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/core/cvdef.h \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/fstream \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/bits/codecvt.h \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/aarch64-none-linux-gnu/bits/basic_file.h \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/aarch64-none-linux-gnu/bits/c++io.h \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/bits/fstream.tcc \
  /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/imgproc.hpp \
  /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/imgproc/imgproc_c.h \
- /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/imgproc/types_c.h
+ /home/dyj/studying/RK3576_RKNN_Learn/rknn-toolkit2/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/include/opencv2/imgproc/types_c.h \
+ /home/dyj/project/Parking/third_party/stb_truetype.h \
+ /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/include/c++/10.3.1/math.h

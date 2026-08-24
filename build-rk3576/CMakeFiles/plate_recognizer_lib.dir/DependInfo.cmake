@@ -8,7 +8,11 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o.d"
+  "/home/dyj/project/Parking/src/recognizer/plate_postprocess.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o.d"
+  "/home/dyj/project/Parking/src/recognizer/plate_preprocess.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o.d"
+  "/home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o.d"
+  "/home/dyj/project/Parking/src/recognizer/plate_visualizer.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o.d"
+  "/home/dyj/project/Parking/src/recognizer/rknn_model.cpp" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o" "gcc" "CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

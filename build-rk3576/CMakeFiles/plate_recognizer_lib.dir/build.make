@@ -72,31 +72,95 @@ include CMakeFiles/plate_recognizer_lib.dir/flags.make
 CMakeFiles/plate_recognizer_lib.dir/codegen:
 .PHONY : CMakeFiles/plate_recognizer_lib.dir/codegen
 
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o"
-	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o -c /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o: /home/dyj/project/Parking/src/recognizer/rknn_model.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o -c /home/dyj/project/Parking/src/recognizer/rknn_model.cpp
 
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.i"
-	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.i
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recognizer/rknn_model.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.i
 
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.s"
-	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.s
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recognizer/rknn_model.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.s
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o: /home/dyj/project/Parking/src/recognizer/plate_preprocess.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o -c /home/dyj/project/Parking/src/recognizer/plate_preprocess.cpp
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recognizer/plate_preprocess.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.i
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recognizer/plate_preprocess.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.s
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o: /home/dyj/project/Parking/src/recognizer/plate_postprocess.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o -c /home/dyj/project/Parking/src/recognizer/plate_postprocess.cpp
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recognizer/plate_postprocess.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.i
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recognizer/plate_postprocess.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.s
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o: /home/dyj/project/Parking/src/recognizer/plate_visualizer.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o -c /home/dyj/project/Parking/src/recognizer/plate_visualizer.cpp
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recognizer/plate_visualizer.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.i
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recognizer/plate_visualizer.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.s
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/flags.make
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o: /home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o: CMakeFiles/plate_recognizer_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o -MF CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o.d -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o -c /home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp > CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.i
+
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++ --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp -o CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.s
 
 # Object files for target plate_recognizer_lib
 plate_recognizer_lib_OBJECTS = \
-"CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o"
+"CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o" \
+"CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o" \
+"CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o" \
+"CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o" \
+"CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o"
 
 # External object files for target plate_recognizer_lib
 plate_recognizer_lib_EXTERNAL_OBJECTS =
 
-libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o
+libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recognizer/rknn_model.cpp.o
+libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_preprocess.cpp.o
+libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_postprocess.cpp.o
+libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_visualizer.cpp.o
+libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o
 libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/build.make
 libplate_recognizer_lib.a: CMakeFiles/plate_recognizer_lib.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libplate_recognizer_lib.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX static library libplate_recognizer_lib.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/plate_recognizer_lib.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/plate_recognizer_lib.dir/link.txt --verbose=$(VERBOSE)
 

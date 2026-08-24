@@ -35,7 +35,11 @@ target_include_directories(parking_lib PUBLIC
 
 # 车牌识别模块
 add_library(plate_recognizer_lib STATIC
-    src/recongizer/plate_recognizer.cpp
+    src/recognizer/rknn_model.cpp
+    src/recognizer/plate_preprocess.cpp
+    src/recognizer/plate_postprocess.cpp
+    src/recognizer/plate_visualizer.cpp
+    src/recognizer/plate_recognizer.cpp
 )
 
 target_include_directories(plate_recognizer_lib

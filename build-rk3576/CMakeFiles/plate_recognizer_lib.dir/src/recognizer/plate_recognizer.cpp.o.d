@@ -1,7 +1,7 @@
-CMakeFiles/plate_recognizer_lib.dir/src/recongizer/plate_recognizer.cpp.o: \
- /home/dyj/project/Parking/src/recongizer/plate_recognizer.cpp \
+CMakeFiles/plate_recognizer_lib.dir/src/recognizer/plate_recognizer.cpp.o: \
+ /home/dyj/project/Parking/src/recognizer/plate_recognizer.cpp \
  /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/usr/include/stdc-predef.h \
- /home/dyj/project/Parking/src/recongizer/plate_recognizer_internal.h \
+ /home/dyj/project/Parking/src/recognizer/plate_recognizer_internal.h \
  /home/dyj/project/Parking/include/plate_recognizer.h \
  /home/dyj/project/Parking/include/rknn_api.h \
  /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/lib/gcc/aarch64-none-linux-gnu/10.3.1/include/stdint.h \
