@@ -86,10 +86,38 @@ CMakeFiles/parking_lib.dir/src/camera/camera.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/parking_lib.dir/src/camera/camera.c.s"
 	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/dyj/project/Parking/src/camera/camera.c -o CMakeFiles/parking_lib.dir/src/camera/camera.c.s
 
+CMakeFiles/parking_lib.dir/src/gate/gate.c.o: CMakeFiles/parking_lib.dir/flags.make
+CMakeFiles/parking_lib.dir/src/gate/gate.c.o: /home/dyj/project/Parking/src/gate/gate.c
+CMakeFiles/parking_lib.dir/src/gate/gate.c.o: CMakeFiles/parking_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/parking_lib.dir/src/gate/gate.c.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/parking_lib.dir/src/gate/gate.c.o -MF CMakeFiles/parking_lib.dir/src/gate/gate.c.o.d -o CMakeFiles/parking_lib.dir/src/gate/gate.c.o -c /home/dyj/project/Parking/src/gate/gate.c
+
+CMakeFiles/parking_lib.dir/src/gate/gate.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/parking_lib.dir/src/gate/gate.c.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/dyj/project/Parking/src/gate/gate.c > CMakeFiles/parking_lib.dir/src/gate/gate.c.i
+
+CMakeFiles/parking_lib.dir/src/gate/gate.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/parking_lib.dir/src/gate/gate.c.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/dyj/project/Parking/src/gate/gate.c -o CMakeFiles/parking_lib.dir/src/gate/gate.c.s
+
+CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o: CMakeFiles/parking_lib.dir/flags.make
+CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o: /home/dyj/project/Parking/src/gate/pwm_sysfs.c
+CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o: CMakeFiles/parking_lib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o -MF CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o.d -o CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o -c /home/dyj/project/Parking/src/gate/pwm_sysfs.c
+
+CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.i"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/dyj/project/Parking/src/gate/pwm_sysfs.c > CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.i
+
+CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.s"
+	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/dyj/project/Parking/src/gate/pwm_sysfs.c -o CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.s
+
 CMakeFiles/parking_lib.dir/src/log/log.c.o: CMakeFiles/parking_lib.dir/flags.make
 CMakeFiles/parking_lib.dir/src/log/log.c.o: /home/dyj/project/Parking/src/log/log.c
 CMakeFiles/parking_lib.dir/src/log/log.c.o: CMakeFiles/parking_lib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/parking_lib.dir/src/log/log.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/parking_lib.dir/src/log/log.c.o"
 	/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/parking_lib.dir/src/log/log.c.o -MF CMakeFiles/parking_lib.dir/src/log/log.c.o.d -o CMakeFiles/parking_lib.dir/src/log/log.c.o -c /home/dyj/project/Parking/src/log/log.c
 
 CMakeFiles/parking_lib.dir/src/log/log.c.i: cmake_force
@@ -103,16 +131,20 @@ CMakeFiles/parking_lib.dir/src/log/log.c.s: cmake_force
 # Object files for target parking_lib
 parking_lib_OBJECTS = \
 "CMakeFiles/parking_lib.dir/src/camera/camera.c.o" \
+"CMakeFiles/parking_lib.dir/src/gate/gate.c.o" \
+"CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o" \
 "CMakeFiles/parking_lib.dir/src/log/log.c.o"
 
 # External object files for target parking_lib
 parking_lib_EXTERNAL_OBJECTS =
 
 libparking_lib.a: CMakeFiles/parking_lib.dir/src/camera/camera.c.o
+libparking_lib.a: CMakeFiles/parking_lib.dir/src/gate/gate.c.o
+libparking_lib.a: CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o
 libparking_lib.a: CMakeFiles/parking_lib.dir/src/log/log.c.o
 libparking_lib.a: CMakeFiles/parking_lib.dir/build.make
 libparking_lib.a: CMakeFiles/parking_lib.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking C static library libparking_lib.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/dyj/project/Parking/build-rk3576/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Linking C static library libparking_lib.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/parking_lib.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/parking_lib.dir/link.txt --verbose=$(VERBOSE)
 

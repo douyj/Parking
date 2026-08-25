@@ -192,6 +192,54 @@ src/camera/camera.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/camera/camera.c.s
 .PHONY : src/camera/camera.c.s
 
+src/gate/gate.o: src/gate/gate.c.o
+.PHONY : src/gate/gate.o
+
+# target to build an object file
+src/gate/gate.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/gate.c.o
+.PHONY : src/gate/gate.c.o
+
+src/gate/gate.i: src/gate/gate.c.i
+.PHONY : src/gate/gate.i
+
+# target to preprocess a source file
+src/gate/gate.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/gate.c.i
+.PHONY : src/gate/gate.c.i
+
+src/gate/gate.s: src/gate/gate.c.s
+.PHONY : src/gate/gate.s
+
+# target to generate assembly for a file
+src/gate/gate.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/gate.c.s
+.PHONY : src/gate/gate.c.s
+
+src/gate/pwm_sysfs.o: src/gate/pwm_sysfs.c.o
+.PHONY : src/gate/pwm_sysfs.o
+
+# target to build an object file
+src/gate/pwm_sysfs.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o
+.PHONY : src/gate/pwm_sysfs.c.o
+
+src/gate/pwm_sysfs.i: src/gate/pwm_sysfs.c.i
+.PHONY : src/gate/pwm_sysfs.i
+
+# target to preprocess a source file
+src/gate/pwm_sysfs.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.i
+.PHONY : src/gate/pwm_sysfs.c.i
+
+src/gate/pwm_sysfs.s: src/gate/pwm_sysfs.c.s
+.PHONY : src/gate/pwm_sysfs.s
+
+# target to generate assembly for a file
+src/gate/pwm_sysfs.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parking_lib.dir/build.make CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.s
+.PHONY : src/gate/pwm_sysfs.c.s
+
 src/log/log.o: src/log/log.c.o
 .PHONY : src/log/log.o
 
@@ -399,6 +447,12 @@ help:
 	@echo "... src/camera/camera.o"
 	@echo "... src/camera/camera.i"
 	@echo "... src/camera/camera.s"
+	@echo "... src/gate/gate.o"
+	@echo "... src/gate/gate.i"
+	@echo "... src/gate/gate.s"
+	@echo "... src/gate/pwm_sysfs.o"
+	@echo "... src/gate/pwm_sysfs.i"
+	@echo "... src/gate/pwm_sysfs.s"
 	@echo "... src/log/log.o"
 	@echo "... src/log/log.i"
 	@echo "... src/log/log.s"

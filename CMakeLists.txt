@@ -26,6 +26,8 @@ set_target_properties(rknnrt PROPERTIES
 # 摄像头、日志等基础模块
 add_library(parking_lib STATIC
     src/camera/camera.c
+    src/gate/gate.c
+    src/gate/pwm_sysfs.c
     src/log/log.c
 )
 

@@ -7,6 +7,18 @@
 },
 {
   "directory": "/home/dyj/project/Parking/build-rk3576",
+  "command": "/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc  -I/home/dyj/project/Parking/include -O3 -DNDEBUG -std=gnu99 -o CMakeFiles/parking_lib.dir/src/gate/gate.c.o -c /home/dyj/project/Parking/src/gate/gate.c",
+  "file": "/home/dyj/project/Parking/src/gate/gate.c",
+  "output": "CMakeFiles/parking_lib.dir/src/gate/gate.c.o"
+},
+{
+  "directory": "/home/dyj/project/Parking/build-rk3576",
+  "command": "/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc  -I/home/dyj/project/Parking/include -O3 -DNDEBUG -std=gnu99 -o CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o -c /home/dyj/project/Parking/src/gate/pwm_sysfs.c",
+  "file": "/home/dyj/project/Parking/src/gate/pwm_sysfs.c",
+  "output": "CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o"
+},
+{
+  "directory": "/home/dyj/project/Parking/build-rk3576",
   "command": "/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc --sysroot=/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc  -I/home/dyj/project/Parking/include -O3 -DNDEBUG -std=gnu99 -o CMakeFiles/parking_lib.dir/src/log/log.c.o -c /home/dyj/project/Parking/src/log/log.c",
   "file": "/home/dyj/project/Parking/src/log/log.c",
   "output": "CMakeFiles/parking_lib.dir/src/log/log.c.o"

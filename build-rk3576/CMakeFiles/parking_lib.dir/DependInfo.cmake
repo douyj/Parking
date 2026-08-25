@@ -9,6 +9,8 @@ set(CMAKE_DEPENDS_LANGUAGES
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/dyj/project/Parking/src/camera/camera.c" "CMakeFiles/parking_lib.dir/src/camera/camera.c.o" "gcc" "CMakeFiles/parking_lib.dir/src/camera/camera.c.o.d"
+  "/home/dyj/project/Parking/src/gate/gate.c" "CMakeFiles/parking_lib.dir/src/gate/gate.c.o" "gcc" "CMakeFiles/parking_lib.dir/src/gate/gate.c.o.d"
+  "/home/dyj/project/Parking/src/gate/pwm_sysfs.c" "CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o" "gcc" "CMakeFiles/parking_lib.dir/src/gate/pwm_sysfs.c.o.d"
   "/home/dyj/project/Parking/src/log/log.c" "CMakeFiles/parking_lib.dir/src/log/log.c.o" "gcc" "CMakeFiles/parking_lib.dir/src/log/log.c.o.d"
   )
 
