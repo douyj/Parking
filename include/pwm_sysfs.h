@@ -15,16 +15,17 @@ extern "C" {
  * 该结构只供 gate 模块持有，业务代码不应直接修改其中字段。
  */
 typedef struct pwm_sysfs {
-    char pwmchip_path[PWM_SYSFS_PATH_CAPACITY];
-    char pwm_path[PWM_SYSFS_PATH_CAPACITY];
-    unsigned int channel;
-    uint64_t period_ns;
-    uint64_t duty_cycle_ns;
-    int exported_by_us;
-    int initialized;
-    int configured;
-    int enabled;
-    char error[PWM_SYSFS_ERROR_CAPACITY];
+    char pwmchip_path[PWM_SYSFS_PATH_CAPACITY];     // PWM 设备路径
+    char pwmchip_name[PWM_SYSFS_PATH_CAPACITY];     // PWM 设备名称
+    char pwm_path[PWM_SYSFS_PATH_CAPACITY];         // PWM 通道路径
+    unsigned int channel;                          // PWM 通道号
+    uint64_t period_ns;                             // PWM 周期，单位纳秒
+    uint64_t duty_cycle_ns;                         // PWM 占空时间，单位纳秒
+    int exported_by_us;                            // 是否由用户空间导出
+    int initialized;                             // 是否初始化
+    int configured;                              // 是否配置
+    int enabled;                                 // 是否 enabled
+    char error[PWM_SYSFS_ERROR_CAPACITY];         // 错误信息
 } pwm_sysfs_t;
 
 /* 打开 pwmchip，并在需要时导出指定通道。 */

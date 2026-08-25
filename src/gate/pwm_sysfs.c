@@ -17,6 +17,12 @@
 #define PWM_EXPORT_WAIT_ATTEMPTS 50
 #define PWM_EXPORT_WAIT_INTERVAL_NS 10000000L
 
+/*
+    @brief 设置 PWM 错误信息
+    @param pwm PWM 设备指针
+    @param format 错误信息格式
+    @param ... 格式化参数
+*/
 static void set_error(pwm_sysfs_t *pwm, const char *format, ...)
 {
     va_list arguments;
@@ -29,12 +35,25 @@ static void set_error(pwm_sysfs_t *pwm, const char *format, ...)
     va_end(arguments);
 }
 
+/*
+    @brief 清除 PWM 错误信息
+    @param pwm PWM 设备指针
+*/
 static void clear_error(pwm_sysfs_t *pwm)
 {
     if (pwm != NULL)
         pwm->error[0] = '\0';
 }
 
+/*
+    @brief 构建 PWM sysfs 路径
+    @param pwm PWM 设备指针
+    @param destination 目标缓冲区
+    @param destination_size 目标缓冲区大小
+    @param format 路径格式
+    @param ... 格式化参数
+    @return 0 成功，-1 失败
+*/
 static int make_path(pwm_sysfs_t *pwm, char *destination,
                      size_t destination_size, const char *format, ...)
 {
@@ -54,6 +73,13 @@ static int make_path(pwm_sysfs_t *pwm, char *destination,
     return 0;
 }
 
+/*
+    @brief 写入 PWM sysfs 文件
+    @param pwm PWM 设备指针
+    @param path 文件路径
+    @param text 要写入的文本
+    @return 0 成功，-1 失败
+*/
 static int write_text(pwm_sysfs_t *pwm, const char *path, const char *text)
 {
     int descriptor;
@@ -95,6 +121,13 @@ static int write_text(pwm_sysfs_t *pwm, const char *path, const char *text)
     return 0;
 }
 
+/*
+    @brief 写入 PWM sysfs 文件
+    @param pwm PWM 设备指针
+    @param path 文件路径
+    @param value 要写入的 64 位无符号整数
+    @return 0 成功，-1 失败
+*/
 static int write_u64(pwm_sysfs_t *pwm, const char *path, uint64_t value)
 {
     char text[32];
@@ -110,6 +143,13 @@ static int write_u64(pwm_sysfs_t *pwm, const char *path, uint64_t value)
     return write_text(pwm, path, text);
 }
 
+/*
+    @brief 写入 PWM sysfs 文件
+    @param pwm PWM 设备指针
+    @param path 文件路径
+    @param channel 要写入的通道
+    @return 0 成功，-1 失败
+*/
 static int write_channel(pwm_sysfs_t *pwm, const char *path,
                          unsigned int channel)
 {
@@ -126,6 +166,12 @@ static int write_channel(pwm_sysfs_t *pwm, const char *path,
     return write_text(pwm, path, text);
 }
 
+/*
+    @brief 读取 PWM sysfs 文件
+    @param pwm PWM 设备指针
+    @param count 通道数量指针
+    @return 0 成功，-1 失败
+*/
 static int read_channel_count(pwm_sysfs_t *pwm, unsigned int *count)
 {
     char path[PWM_SYSFS_PATH_CAPACITY];
@@ -183,6 +229,11 @@ static int read_channel_count(pwm_sysfs_t *pwm, unsigned int *count)
     return 0;
 }
 
+/*
+    @brief 检查路径是否为目录
+    @param path 路径
+    @return 0 成功，-1 失败
+*/
 static int path_is_directory(const char *path)
 {
     struct stat status;
@@ -193,6 +244,11 @@ static int path_is_directory(const char *path)
     return S_ISDIR(status.st_mode);
 }
 
+/*
+    @brief 等待 PWM 通道目录存在
+    @param pwm PWM 设备指针
+    @return 0 成功，-1 失败
+*/
 static int wait_for_pwm_path(pwm_sysfs_t *pwm)
 {
     const struct timespec interval = {
@@ -213,6 +269,13 @@ static int wait_for_pwm_path(pwm_sysfs_t *pwm)
     return -1;
 }
 
+/*
+    @brief 打开 PWM 通道
+    @param pwm PWM 设备指针
+    @param pwmchip_path pwmchip 路径
+    @param channel 要打开的通道
+    @return 0 成功，-1 失败
+*/
 int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
                    unsigned int channel)
 {
@@ -289,6 +352,13 @@ int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
     return 0;
 }
 
+/*
+    @brief 配置 PWM 通道
+    @param pwm PWM 设备指针
+    @param period_ns 周期时间（纳秒）
+    @param initial_duty_ns 初始占空时间（纳秒）
+    @return 0 成功，-1 失败
+*/
 int pwm_sysfs_configure(pwm_sysfs_t *pwm, uint64_t period_ns,
                         uint64_t initial_duty_ns)
 {
@@ -334,6 +404,12 @@ int pwm_sysfs_configure(pwm_sysfs_t *pwm, uint64_t period_ns,
     return 0;
 }
 
+/*
+    @brief 设置 PWM 通道占空时间
+    @param pwm PWM 设备指针
+    @param duty_ns 占空时间（纳秒）
+    @return 0 成功，-1 失败
+*/
 int pwm_sysfs_set_duty_cycle(pwm_sysfs_t *pwm, uint64_t duty_ns)
 {
     char duty_path[PWM_SYSFS_PATH_CAPACITY];
@@ -356,6 +432,11 @@ int pwm_sysfs_set_duty_cycle(pwm_sysfs_t *pwm, uint64_t duty_ns)
     return 0;
 }
 
+/*
+    @brief 使能 PWM 通道
+    @param pwm PWM 设备指针
+    @return 0 成功，-1 失败
+*/
 int pwm_sysfs_enable(pwm_sysfs_t *pwm)
 {
     char enable_path[PWM_SYSFS_PATH_CAPACITY];
@@ -380,6 +461,11 @@ int pwm_sysfs_enable(pwm_sysfs_t *pwm)
     return 0;
 }
 
+/*
+    @brief 禁用 PWM 通道
+    @param pwm PWM 设备指针
+    @return 0 成功，-1 失败
+*/
 int pwm_sysfs_disable(pwm_sysfs_t *pwm)
 {
     char enable_path[PWM_SYSFS_PATH_CAPACITY];
@@ -404,11 +490,21 @@ int pwm_sysfs_disable(pwm_sysfs_t *pwm)
     return 0;
 }
 
+/*
+    @brief 获取 PWM 通道最后错误信息
+    @param pwm PWM 设备指针
+    @return 错误信息字符串指针
+    @note 调用者不得释放返回的字符串，由 pwm_sysfs_t 持有。
+*/
 const char *pwm_sysfs_last_error(const pwm_sysfs_t *pwm)
 {
     return pwm != NULL ? pwm->error : "pwm_sysfs is null";
 }
 
+/*
+    @brief 关闭 PWM 通道
+    @param pwm PWM 设备指针
+*/
 void pwm_sysfs_close(pwm_sysfs_t *pwm)
 {
     char unexport_path[PWM_SYSFS_PATH_CAPACITY];
