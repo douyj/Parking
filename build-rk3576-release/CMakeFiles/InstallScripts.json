@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/dyj/project/Parking/build-rk3576-release/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
