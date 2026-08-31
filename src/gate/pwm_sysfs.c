@@ -269,6 +269,12 @@ static int wait_for_pwm_path(pwm_sysfs_t *pwm)
     return -1;
 }
 
+
+/*
+===================================================================================
+*/
+
+
 /*
     @brief 打开 PWM 通道
     @param pwm PWM 设备指针
@@ -279,13 +285,13 @@ static int wait_for_pwm_path(pwm_sysfs_t *pwm)
 int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
                    unsigned int channel)
 {
-    char export_path[PWM_SYSFS_PATH_CAPACITY];
-    char unexport_path[PWM_SYSFS_PATH_CAPACITY];
-    char saved_error[PWM_SYSFS_ERROR_CAPACITY];
-    unsigned int channel_count;
-    int export_result;
-    int export_errno;
-    int length;
+    char export_path[PWM_SYSFS_PATH_CAPACITY];      // export 文件路径
+    char unexport_path[PWM_SYSFS_PATH_CAPACITY];    // unexport 文件路径
+    char saved_error[PWM_SYSFS_ERROR_CAPACITY];      // 保存的错误信息
+    unsigned int channel_count;                     // 通道数量
+    int export_result;                              // export 操作结果
+    int export_errno;                               // export 操作错误码
+    int length;                                     // 字符串长度
 
     if (pwm == NULL || pwmchip_path == NULL || pwmchip_path[0] == '\0') {
         if (pwm != NULL)
@@ -294,22 +300,23 @@ int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
         return -1;
     }
 
-    memset(pwm, 0, sizeof(*pwm));
+    memset(pwm, 0, sizeof(*pwm));   // 初始化 PWM 设备结构体
 
-    length = snprintf(pwm->pwmchip_path, sizeof(pwm->pwmchip_path), "%s",
-                      pwmchip_path);
+    length = snprintf(pwm->pwmchip_path, sizeof(pwm->pwmchip_path), "%s", pwmchip_path);  
     if (length < 0 || (size_t)length >= sizeof(pwm->pwmchip_path)) {
         set_error(pwm, "pwmchip 路径过长");
         errno = ENAMETOOLONG;
         return -1;
     }
 
+    // 检查 pwmchip 目录是否存在
     if (!path_is_directory(pwm->pwmchip_path)) {
         set_error(pwm, "pwmchip 目录不存在: %s", pwm->pwmchip_path);
         errno = ENOENT;
         return -1;
     }
 
+    // 检查通道是否超出范围
     pwm->channel = channel;
     if (read_channel_count(pwm, &channel_count) != 0)
         return -1;
@@ -321,12 +328,10 @@ int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
         return -1;
     }
 
-    if (make_path(pwm, pwm->pwm_path, sizeof(pwm->pwm_path), "%s/pwm%u",
-                  pwm->pwmchip_path, channel) != 0 ||
-        make_path(pwm, export_path, sizeof(export_path), "%s/export",
-                  pwm->pwmchip_path) != 0 ||
-        make_path(pwm, unexport_path, sizeof(unexport_path), "%s/unexport",
-                  pwm->pwmchip_path) != 0)
+    // 构建 PWM 通道路径
+    if (make_path(pwm, pwm->pwm_path, sizeof(pwm->pwm_path), "%s/pwm%u", pwm->pwmchip_path, channel) != 0 ||
+        make_path(pwm, export_path, sizeof(export_path), "%s/export", pwm->pwmchip_path) != 0 ||
+        make_path(pwm, unexport_path, sizeof(unexport_path), "%s/unexport",pwm->pwmchip_path) != 0)
         return -1;
 
     if (!path_is_directory(pwm->pwm_path)) {
@@ -362,7 +367,6 @@ int pwm_sysfs_open(pwm_sysfs_t *pwm, const char *pwmchip_path,
 int pwm_sysfs_configure(pwm_sysfs_t *pwm, uint64_t period_ns,
                         uint64_t initial_duty_ns)
 {
-    char enable_path[PWM_SYSFS_PATH_CAPACITY];
     char polarity_path[PWM_SYSFS_PATH_CAPACITY];
     char period_path[PWM_SYSFS_PATH_CAPACITY];
     char duty_path[PWM_SYSFS_PATH_CAPACITY];
@@ -376,26 +380,28 @@ int pwm_sysfs_configure(pwm_sysfs_t *pwm, uint64_t period_ns,
     }
 
     clear_error(pwm);
-    if (make_path(pwm, enable_path, sizeof(enable_path), "%s/enable",
-                  pwm->pwm_path) != 0 ||
-        make_path(pwm, polarity_path, sizeof(polarity_path), "%s/polarity",
-                  pwm->pwm_path) != 0 ||
-        make_path(pwm, period_path, sizeof(period_path), "%s/period",
-                  pwm->pwm_path) != 0 ||
-        make_path(pwm, duty_path, sizeof(duty_path), "%s/duty_cycle",
-                  pwm->pwm_path) != 0)
+    if (make_path(pwm, polarity_path, sizeof(polarity_path),
+                "%s/polarity", pwm->pwm_path) != 0 ||
+        make_path(pwm, period_path, sizeof(period_path),
+                "%s/period", pwm->pwm_path) != 0 ||
+        make_path(pwm, duty_path, sizeof(duty_path),
+                "%s/duty_cycle", pwm->pwm_path) != 0)
         return -1;
 
-    /* 修改极性和周期前先停止输出，并清零旧占空时间。 */
-    if (write_text(pwm, enable_path, "0") != 0 ||
-        write_u64(pwm, duty_path, 0) != 0 ||
-        write_text(pwm, polarity_path, "normal") != 0 ||
-        write_u64(pwm, period_path, period_ns) != 0 ||
-        write_u64(pwm, duty_path, initial_duty_ns) != 0) {
-        pwm->enabled = 0;
-        pwm->configured = 0;
-        return -1;
-    }
+        /*
+        * RK3576 刚 export PWM 时 period 可能为 0。
+        * 此时不能先写 enable=0，否则驱动可能返回 EINVAL。
+        *
+        * 所以先建立合法 period，再设置 duty 和 polarity。
+        */
+        if (write_u64(pwm, period_path, period_ns) != 0 ||
+            write_u64(pwm, duty_path, initial_duty_ns) != 0 ||
+            write_text(pwm, polarity_path, "normal") != 0) {
+
+            pwm->enabled = 0;
+            pwm->configured = 0;
+            return -1;
+        }
 
     pwm->period_ns = period_ns;
     pwm->duty_cycle_ns = initial_duty_ns;
@@ -452,9 +458,7 @@ int pwm_sysfs_enable(pwm_sysfs_t *pwm)
         return 0;
 
     clear_error(pwm);
-    if (make_path(pwm, enable_path, sizeof(enable_path), "%s/enable",
-                  pwm->pwm_path) != 0 ||
-        write_text(pwm, enable_path, "1") != 0)
+    if (make_path(pwm, enable_path, sizeof(enable_path), "%s/enable", pwm->pwm_path) != 0 || write_text(pwm, enable_path, "1") != 0)
         return -1;
 
     pwm->enabled = 1;

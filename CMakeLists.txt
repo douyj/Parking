@@ -82,6 +82,16 @@ target_link_libraries(test_recognizer
         plate_recognizer_lib
 )
 
+# Gate 真实硬件交互测试（不会注册到 CTest，避免自动驱动闸门）
+add_executable(test_gate
+    tests/test_gate.c
+)
+
+target_link_libraries(test_gate
+    PRIVATE
+        parking_lib
+)
+
 set_target_properties(test_recognizer PROPERTIES
     BUILD_RPATH "$ORIGIN/lib"
     INSTALL_RPATH "$ORIGIN/../lib"

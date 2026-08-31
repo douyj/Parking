@@ -15,15 +15,15 @@
 struct gate{
     pwm_sysfs_t pwm;
 
-    uint64_t open_pulse_ns;     //开闸脉宽
-    uint64_t close_pulse_ns;    //关闸脉宽
-    unsigned int movement_time_ms;      
-    int hold_after_move;
-
+    uint64_t open_pulse_ns;     //开闸时的 PWM 高电平持续时间，单位纳秒
+    uint64_t close_pulse_ns;    //关闸时的 PWM 高电平持续时间，单位纳秒
+    unsigned int movement_time_ms;      //软件认为完成一次开关动作所需的时间
+    int hold_after_move;          //是否在移动完成后保持状态，0：不保持，1：保持
+ 
     gate_state_t state;     //当前状态
     uint64_t movement_start_ms;     //本次动作开始时间
 
-    char error[GATE_ERROR_CAPACITY];
+    char error[GATE_ERROR_CAPACITY];     //错误信息
 };
 
 /*
@@ -189,7 +189,11 @@ int gate_close(gate_t *gate)
 }
 
 
-
+/*
+    @brief 判断动作是否完成
+    @param gate 闸门指针
+    @return 0 成功 -1 失败
+*/
 int gate_update(gate_t *gate)
 {
     uint64_t now;

@@ -26,15 +26,15 @@ typedef enum {
 } gate_error_t;
 
 typedef struct {
-    const char *pwmchip_path;
-    unsigned int channel;
+    const char *pwmchip_path;   // PWM 设备路径
+    unsigned int channel;       // PWM 通道
 
-    uint64_t period_ns;
-    uint64_t open_pulse_ns;
-    uint64_t close_pulse_ns;
+    uint64_t period_ns;         // PWM 周期，单位纳秒
+    uint64_t open_pulse_ns;     // 开闸脉冲宽度，单位纳秒
+    uint64_t close_pulse_ns;    // 关闸脉冲宽度，单位纳秒
 
-    unsigned int movement_time_ms;
-    int hold_after_move;
+    unsigned int movement_time_ms; // 闸门移动时间，单位毫秒
+    int hold_after_move;          // 是否在移动完成后保持状态
 } gate_config_t;
 
 /* 创建成功后主动将闸门置于关闭位置 */
