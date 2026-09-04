@@ -15,6 +15,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 查找 OpenCV
 find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+find_package(Threads REQUIRED)
 
 # 导入项目自带的 RKNN Runtime
 add_library(rknnrt SHARED IMPORTED)
@@ -114,6 +115,23 @@ target_link_libraries(test_realtime_recognizer
 )
 
 set_target_properties(test_realtime_recognizer PROPERTIES
+    BUILD_RPATH "$ORIGIN/lib"
+    INSTALL_RPATH "$ORIGIN/../lib"
+)
+
+# USB 摄像头多线程实时车牌识别测试（不注册到 CTest）
+add_executable(test_realtime_recognizer_threaded
+    tests/test_realtime_recognizer_threaded.c
+)
+
+target_link_libraries(test_realtime_recognizer_threaded
+    PRIVATE
+        parking_lib
+        plate_recognizer_lib
+        Threads::Threads
+)
+
+set_target_properties(test_realtime_recognizer_threaded PROPERTIES
     BUILD_RPATH "$ORIGIN/lib"
     INSTALL_RPATH "$ORIGIN/../lib"
 )
