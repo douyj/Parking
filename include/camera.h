@@ -18,11 +18,11 @@ typedef struct {
 
 /* 摄像头配置结构体 */
 typedef struct {
-    const char *device;
-    unsigned int width;
-    unsigned int height;
-    unsigned int fps;
-    unsigned int pixel_format;
+    const char *device;     // 摄像头设备路径，例如 /dev/video0
+    unsigned int width;     // 图像宽度
+    unsigned int height;     // 图像高度
+    unsigned int fps;     // 帧率
+    unsigned int pixel_format;     // 像素格式，例如 V4L2_PIX_FMT_MJPEG 或 V4L2_PIX_FMT_YUYV
 } CameraConfig;
 
 /* data 指向 mmap 缓冲区；使用后必须调用 camera_release_frame()。 */
@@ -40,16 +40,16 @@ typedef struct {
 
 /* 摄像头结构体 */
 typedef struct {
-    int fd;
-    unsigned int width;
-    unsigned int height;
-    unsigned int fps;
-    unsigned int pixel_format;
-    unsigned int bytes_per_line;
-    size_t image_size;
-    CameraBuffer *buffers;
-    unsigned int buffer_count;
-    int streaming;
+    int fd;     // 文件描述符   
+    unsigned int width;     // 图像宽度
+    unsigned int height;     // 图像高度
+    unsigned int fps;     // 帧率
+    unsigned int pixel_format;     // 像素格式
+    unsigned int bytes_per_line;     // 每行字节数
+    size_t image_size;     // 图像大小
+    CameraBuffer *buffers;     // 缓冲区数组
+    unsigned int buffer_count;   // 缓冲区数量
+    int streaming;     // 是否正在流式传输
 } Camera;
 
 int camera_open(Camera *camera, const CameraConfig *config);

@@ -1,201 +1,206 @@
 #include "camera.h"
+#include "display.h"
+#include "image_convert.h"
 #include "log.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <linux/fb.h>
+#include <limits.h>
 #include <linux/videodev2.h>
 #include <signal.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
+#include <strings.h>
+#include <stdint.h>
+#include <time.h>
 #include <unistd.h>
 
-#define CAMERA_DEVICE "/dev/video1"
-#define FRAMEBUFFER_DEVICE "/dev/fb0"
-#define CAMERA_WIDTH 640U
-#define CAMERA_HEIGHT 480U
-#define CAMERA_FPS 30U
+#define DEFAULT_CAMERA_DEVICE "/dev/video0"
+#define DEFAULT_FRAMEBUFFER_DEVICE "/dev/fb0"
+#define DEFAULT_CAMERA_WIDTH 1280U
+#define DEFAULT_CAMERA_HEIGHT 720U
+#define DEFAULT_CAMERA_FPS 30U
 
-typedef struct {
-    int fd;
-    unsigned char *memory;
-    size_t memory_size;
-    struct fb_var_screeninfo variable;
-    struct fb_fix_screeninfo fixed;
-} Framebuffer;
+static volatile sig_atomic_t running = 1;   // 程序是否继续运行的标志位
 
-static volatile sig_atomic_t running = 1;
-
+// 处理退出信号的函数
 static void handle_signal(int signal_number)
 {
     (void)signal_number;
     running = 0;
 }
 
-static int framebuffer_open(Framebuffer *framebuffer)
+
+// 安装退出信号处理函数
+static int install_signal_handlers(void)
 {
-    memset(framebuffer, 0, sizeof(*framebuffer));
-    framebuffer->fd = -1;
+    struct sigaction action;
 
-    framebuffer->fd = open(FRAMEBUFFER_DEVICE, O_RDWR);
-    if (framebuffer->fd < 0) {
-        LOG_ERROR("打开 %s 失败: %s", FRAMEBUFFER_DEVICE, strerror(errno));
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGINT, &action, NULL) < 0 ||
+        sigaction(SIGTERM, &action, NULL) < 0) {
+        LOG_ERROR("安装退出信号处理失败: %s", strerror(errno));
         return -1;
-    }
-    if (ioctl(framebuffer->fd, FBIOGET_VSCREENINFO,
-              &framebuffer->variable) < 0 ||
-        ioctl(framebuffer->fd, FBIOGET_FSCREENINFO,
-              &framebuffer->fixed) < 0) {
-        LOG_ERROR("读取 framebuffer 信息失败: %s", strerror(errno));
-        close(framebuffer->fd);
-        framebuffer->fd = -1;
-        return -1;
-    }
-    if (framebuffer->variable.bits_per_pixel != 16) {
-        LOG_ERROR("LCD 不是 RGB565: bits_per_pixel=%u",
-                  framebuffer->variable.bits_per_pixel);
-        close(framebuffer->fd);
-        framebuffer->fd = -1;
-        return -1;
-    }
-
-    framebuffer->memory_size = framebuffer->fixed.smem_len;
-    framebuffer->memory = mmap(NULL, framebuffer->memory_size,
-                               PROT_READ | PROT_WRITE, MAP_SHARED,
-                               framebuffer->fd, 0);
-    if (framebuffer->memory == MAP_FAILED) {
-        framebuffer->memory = NULL;
-        LOG_ERROR("映射 framebuffer 失败: %s", strerror(errno));
-        close(framebuffer->fd);
-        framebuffer->fd = -1;
-        return -1;
-    }
-
-    LOG_INFO("LCD: %ux%u, virtual=%ux%u, stride=%u, bpp=%u",
-             framebuffer->variable.xres, framebuffer->variable.yres,
-             framebuffer->variable.xres_virtual,
-             framebuffer->variable.yres_virtual,
-             framebuffer->fixed.line_length,
-             framebuffer->variable.bits_per_pixel);
-    return 0;
-}
-
-static void framebuffer_close(Framebuffer *framebuffer)
-{
-    if (framebuffer->memory != NULL)
-        munmap(framebuffer->memory, framebuffer->memory_size);
-    if (framebuffer->fd >= 0)
-        close(framebuffer->fd);
-    memset(framebuffer, 0, sizeof(*framebuffer));
-    framebuffer->fd = -1;
-}
-
-static int framebuffer_show_rgb565(const Framebuffer *framebuffer,
-                                   const CameraFrame *frame)
-{
-    unsigned int copy_width;
-    unsigned int copy_height;
-    unsigned int source_x;
-    unsigned int source_y;
-    unsigned int destination_x;
-    unsigned int destination_y;
-    size_t required_size;
-
-    if (frame->pixel_format != V4L2_PIX_FMT_RGB565) {
-        LOG_ERROR("摄像头实际格式不是 RGB565: 0x%08x",
-                  frame->pixel_format);
-        return -1;
-    }
-
-    copy_width = frame->width < framebuffer->variable.xres
-                     ? frame->width : framebuffer->variable.xres;
-    copy_height = frame->height < framebuffer->variable.yres
-                      ? frame->height : framebuffer->variable.yres;
-    source_x = (frame->width - copy_width) / 2U;
-    source_y = (frame->height - copy_height) / 2U;
-    destination_x = (framebuffer->variable.xres - copy_width) / 2U;
-    destination_y = (framebuffer->variable.yres - copy_height) / 2U;
-
-    required_size = (size_t)frame->bytes_per_line * frame->height;
-    if (frame->bytes_per_line < frame->width * 2U ||
-        frame->size < required_size) {
-        LOG_ERROR("RGB565 帧长度异常: bytes=%zu, required=%zu",
-                  frame->size, required_size);
-        return -1;
-    }
-
-    for (unsigned int row = 0; row < copy_height; ++row) {
-        const unsigned char *source =
-            (const unsigned char *)frame->data +
-            (size_t)(source_y + row) * frame->bytes_per_line +
-            (size_t)source_x * 2U;
-        unsigned char *destination = framebuffer->memory +
-            (size_t)(framebuffer->variable.yoffset + destination_y + row) *
-                framebuffer->fixed.line_length +
-            (size_t)(framebuffer->variable.xoffset + destination_x) * 2U;
-
-        memcpy(destination, source, (size_t)copy_width * 2U);
     }
     return 0;
 }
 
-int main(void)
+// 获取当前时间戳（毫秒级）
+static uint64_t monotonic_ms(void)
 {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+        return 0;
+    return (uint64_t)now.tv_sec * 1000ULL +
+           (uint64_t)now.tv_nsec / 1000000ULL;
+}
+
+// 解析无符号整数
+static int parse_unsigned(const char *text, unsigned int *value)
+{
+    char *end;
+    unsigned long parsed;
+
+    errno = 0;
+    parsed = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' ||
+        parsed == 0 || parsed > UINT_MAX)
+        return -1;
+    *value = (unsigned int)parsed;
+    return 0;
+}
+
+// 解析像素格式字符串
+static int parse_pixel_format(const char *text, unsigned int *format)
+{
+    if (strcasecmp(text, "MJPG") == 0 || strcasecmp(text, "MJPEG") == 0) {
+        *format = V4L2_PIX_FMT_MJPEG;
+        return 0;
+    }
+    if (strcasecmp(text, "YUYV") == 0) {
+        *format = V4L2_PIX_FMT_YUYV;
+        return 0;
+    }
+    return -1;
+}
+
+static void print_usage(const char *program)
+{
+    fprintf(stderr,
+            "用法: %s [camera] [width] [height] [fps] "
+            "[MJPG|YUYV] [framebuffer]\n",
+            program);
+}
+
+int main(int argc, char *argv[])
+{
+    const char *camera_device =
+        argc > 1 ? argv[1] : DEFAULT_CAMERA_DEVICE;
+    const char *framebuffer_device =
+        argc > 6 ? argv[6] : DEFAULT_FRAMEBUFFER_DEVICE;
+    unsigned int width = DEFAULT_CAMERA_WIDTH;
+    unsigned int height = DEFAULT_CAMERA_HEIGHT;
+    unsigned int fps = DEFAULT_CAMERA_FPS;
+    unsigned int pixel_format = V4L2_PIX_FMT_MJPEG;
     Camera camera;
-    Framebuffer framebuffer;
-    CameraConfig config = {
-        .device = CAMERA_DEVICE,
-        .width = CAMERA_WIDTH,
-        .height = CAMERA_HEIGHT,
-        .fps = CAMERA_FPS,
-        .pixel_format = V4L2_PIX_FMT_RGB565,
-    };
+    display_t *display;
+    display_config_t display_config;
+    CameraConfig config;
     int result = 1;
 
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-
-    if (framebuffer_open(&framebuffer) != 0)
+    if (argc > 7 ||
+        (argc > 2 && parse_unsigned(argv[2], &width) != 0) ||
+        (argc > 3 && parse_unsigned(argv[3], &height) != 0) ||
+        (argc > 4 && parse_unsigned(argv[4], &fps) != 0) ||
+        (argc > 5 && parse_pixel_format(argv[5], &pixel_format) != 0)) {
+        print_usage(argv[0]);
         return 1;
+    }
+
+    if (install_signal_handlers() != 0) return 1;
+    display_config.device = framebuffer_device;
+    display_config.keep_aspect_ratio = 1;
+    display = display_create(&display_config);
+    if (display == NULL)
+        return 1;
+
+    config.device = camera_device;
+    config.width = width;
+    config.height = height;
+    config.fps = fps;
+    config.pixel_format = pixel_format;
     if (camera_open(&camera, &config) != 0)
-        goto close_framebuffer;
-    if (camera.pixel_format != V4L2_PIX_FMT_RGB565) {
-        LOG_ERROR("驱动没有接受 RGB565，实际 FOURCC=0x%08x",
+        goto destroy_display;
+    if (camera.pixel_format != V4L2_PIX_FMT_MJPEG &&
+        camera.pixel_format != V4L2_PIX_FMT_YUYV) {
+        LOG_ERROR("摄像头实际格式不受支持: 0x%08x",
                   camera.pixel_format);
         goto close_camera;
     }
     if (camera_start(&camera) != 0)
         goto close_camera;
 
-    LOG_INFO("开始实时显示，按 Ctrl+C 退出");
+    LOG_INFO("开始实时显示: %ux%u@%u，按 Ctrl+C 退出",
+             camera.width, camera.height, camera.fps);
     result = 0;
-    while (running) {
-        CameraFrame frame;
+    {
+        uint64_t report_started_ms = monotonic_ms();
+        unsigned int displayed_frames = 0;
 
-        if (camera_get_frame(&camera, &frame, 1000) != 0) {
-            if (!running)
+        while (running) {
+            CameraFrame frame;
+            image_bgr_frame_t bgr_frame;
+            display_frame_t display_frame;
+            int convert_result;
+
+            if (camera_get_frame(&camera, &frame, 1000) != 0) {
+                if (!running)
+                    break;
+                result = 1;
                 break;
-            result = 1;
-            break;
+            }
+            convert_result = image_convert_to_bgr(&frame, &bgr_frame);
+            if (camera_release_frame(&camera, &frame) != 0) {
+                image_bgr_frame_release(&bgr_frame);
+                result = 1;
+                break;
+            }
+            if (convert_result != 0) {
+                image_bgr_frame_release(&bgr_frame);
+                result = 1;
+                break;
+            }
+            display_frame.data = bgr_frame.data;
+            display_frame.width = bgr_frame.width;
+            display_frame.height = bgr_frame.height;
+            display_frame.stride = bgr_frame.stride;
+            display_frame.pixel_format = DISPLAY_PIXEL_FORMAT_BGR888;
+            if (display_present(display, &display_frame) != 0) {
+                image_bgr_frame_release(&bgr_frame);
+                result = 1;
+                break;
+            }
+            image_bgr_frame_release(&bgr_frame);
+
+            ++displayed_frames;
+            if (monotonic_ms() - report_started_ms >= 1000U) {
+                uint64_t now_ms = monotonic_ms();
+                double elapsed_seconds =
+                    (double)(now_ms - report_started_ms) / 1000.0;
+                LOG_INFO("显示 FPS: %.1f",
+                         displayed_frames / elapsed_seconds);
+                displayed_frames = 0;
+                report_started_ms = now_ms;
+            }
         }
-        if (framebuffer_show_rgb565(&framebuffer, &frame) != 0)
-            result = 1;
-        if (camera_release_frame(&camera, &frame) != 0) {
-            result = 1;
-            break;
-        }
-        if (result != 0)
-            break;
     }
 
-    camera_stop(&camera);
+    (void)camera_stop(&camera);
 close_camera:
     camera_close(&camera);
-close_framebuffer:
-    framebuffer_close(&framebuffer);
+destroy_display:
+    display_destroy(display);
     return result;
 }

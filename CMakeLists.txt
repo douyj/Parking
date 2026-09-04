@@ -26,13 +26,23 @@ set_target_properties(rknnrt PROPERTIES
 # 摄像头、日志等基础模块
 add_library(parking_lib STATIC
     src/camera/camera.c
+    src/display/display.c
+    src/image/image_convert.c
     src/gate/gate.c
     src/gate/pwm_sysfs.c
     src/log/log.c
 )
 
-target_include_directories(parking_lib PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+target_include_directories(parking_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+)
+
+target_link_libraries(parking_lib
+    PUBLIC
+        m
 )
 
 # 车牌识别模块
@@ -80,6 +90,32 @@ target_include_directories(test_recognizer PRIVATE
 target_link_libraries(test_recognizer
     PRIVATE
         plate_recognizer_lib
+)
+
+# USB 摄像头到 framebuffer 的真实硬件显示测试（不注册到 CTest）
+add_executable(test_camera
+    tests/test_camera.c
+)
+
+target_link_libraries(test_camera
+    PRIVATE
+        parking_lib
+)
+
+# USB 摄像头实时车牌识别测试（不注册到 CTest）
+add_executable(test_realtime_recognizer
+    tests/test_realtime_recognizer.c
+)
+
+target_link_libraries(test_realtime_recognizer
+    PRIVATE
+        parking_lib
+        plate_recognizer_lib
+)
+
+set_target_properties(test_realtime_recognizer PROPERTIES
+    BUILD_RPATH "$ORIGIN/lib"
+    INSTALL_RPATH "$ORIGIN/../lib"
 )
 
 # Gate 真实硬件交互测试（不会注册到 CTest，避免自动驱动闸门）
