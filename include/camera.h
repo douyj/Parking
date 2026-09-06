@@ -27,7 +27,7 @@ typedef struct {
 
 /* data 指向 mmap 缓冲区；使用后必须调用 camera_release_frame()。 */
 typedef struct {
-    void *data;
+    void *data;                     
     size_t size;
     unsigned int width;
     unsigned int height;

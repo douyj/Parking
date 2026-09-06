@@ -1,6 +1,6 @@
 # Parking 项目交接文档
 
-> 最后更新：2026-09-04（Asia/Shanghai）
+> 最后更新：2026-09-06（Asia/Shanghai）
 >
 > 新会话第一步：完整阅读本文，然后执行 `git status --short`。
 >
@@ -27,14 +27,17 @@ USB/V4L2 摄像头
     -> LVGL 本地界面、支付、OTA 等
 ```
 
-目前已打通三条基础链路和一条实时集成链路：
+目前已打通以下链路：
 
 1. RKNN 静态图片车牌识别；
 2. Linux PWM sysfs 到真实舵机开关闸；
 3. USB 摄像头实时采集、图像转换并显示到 MIPI 屏幕；
-4. Camera -> BGR -> RKNN -> Draw -> Display 单线程实时车牌识别。
+4. Camera -> BGR -> RKNN -> Draw -> Display 单线程实时车牌识别；
+5. 连续 3 次确认、漏检容忍和同车牌 10 秒冷却去重；
+6. 采集/转换、RKNN 识别/绘框、fbdev 显示的多线程最新帧流水线；
+7. 稳定车牌事件驱动真实 Gate 开闸，连续 10 秒无车牌识别后自动关闸。
 
-当前单线程实时识别已在 RK3576 真机验证成功；连续多帧确认和相同车牌冷却去重已实现并通过交叉编译，尚待 RK3576 真机验证。真机确认成功后再实现最新帧队列和多线程。
+上述链路均已在 RK3576 真机验证成功。当前联动仍是独立测试程序，下一步应将最新帧槽、车牌确认/冷却和 Gate 联动抽取为正式模块；不要直接改坏已验证的摄像头、单线程识别、多线程识别和 Gate 联动基准。
 
 ## 2. 当前结论速览
 
@@ -47,14 +50,16 @@ USB 摄像头 V4L2 mmap 采集              已验证成功
 MJPG/YUYV -> BGR888                    已实现
 BGR888 -> /dev/fb0 -> MIPI DSI         已实现并完成显示测试
 摄像头实时车牌识别                      已在 RK3576 真机验证
-连续多帧确认与相同车牌冷却去重          已实现，待 RK3576 真机验证
-采集/识别多线程与最新帧队列              尚未实现
+连续多帧确认与相同车牌冷却去重          已在 RK3576 真机验证
+采集/识别/显示多线程与最新帧槽          已在 RK3576 真机验证
+稳定车牌事件 -> Gate 受控联动             已在 RK3576 真机验证
+连续 10 秒无车牌识别 -> 自动关闸          已在 RK3576 真机验证
 LVGL / 原生 DRM/KMS 界面                尚未接入
 停车业务、SQLite、MQTT、计费、支付、OTA  尚未实现
 src/main.c 业务集成                     尚未开始，仍是启动占位程序
 ```
 
-当前没有卡在摄像头、MIPI 屏幕、PWM 或 RKNN 识别上。当前要先验证车牌确认与去重的真机行为，然后再进入多线程低延迟处理。
+当前没有软件或硬件卡点。但 Gate 尚无物理限位、地感、防砸或车辆通过信号；当前自动关闸只依据“连续 10 秒没有识别到有效车牌”的软件计时，因此不能把当前原型当成可无人看守运行的安全系统。
 
 ## 3. 已确认的真实硬件信息
 
@@ -297,9 +302,92 @@ camera_get_frame()
 
 由于当前是单线程每帧推理，显示速度被转换、RKNN 推理和 fbdev 显示共同限制；这是已知性能基线，不是当前故障。
 
-2026-09-04 已在该测试中加入简单结果稳定状态机：每帧选择检测置信度最高的有效车牌，同一车牌稳定出现 3 次后才输出一次“确认车牌”事件，最多容忍 2 帧漏检，连续漏检 3 帧后重置候选，同一已确认车牌使用 10 秒冷却。识别框仍逐帧绘制，逐帧车牌日志改为只输出确认事件。已通过 RK3576 交叉编译，尚未真机验证。
+2026-09-04 已在该测试中加入简单结果稳定状态机：每帧选择检测置信度最高的有效车牌，同一车牌稳定出现 3 次后才输出一次“确认车牌”事件，最多容忍 2 帧漏检，连续漏检 3 帧后重置候选，同一已确认车牌使用 10 秒冷却。识别框仍逐帧绘制，逐帧车牌日志改为只输出确认事件。该功能已在 RK3576 真机验证成功。
 
-### 4.7 Gate
+当前冷却实现只保存一个 `last_confirmed_plate`：同一车牌持续留在画面中时，`candidate_confirmed` 会使它只确认一次；候选被重置后在 10 秒内再次出现会被冷却拦截。这是测试级简化实现，未来多车业务需要使用按车牌管理的事件/冷却表。
+
+### 4.7 Camera 多线程实时车牌识别测试
+
+```text
+tests/test_realtime_recognizer_threaded.c
+CMake 目标：test_realtime_recognizer_threaded
+```
+
+该文件仍是纯 C，通过 pthread 实现三段流水线：
+
+```text
+采集/转换线程
+    -> 容量 1 的 captured_frames 最新帧槽
+    -> RKNN 识别/确认/绘框线程
+    -> 容量 1 的 annotated_frames 最新帧槽
+    -> 主线程 display_present()
+```
+
+帧槽由 `pthread_mutex_t + pthread_cond_t` 保护。生产者发现槽中已有未消费帧时，会先释放旧 BGR 内存再放入最新帧，不会无限积压。消费者通过结构体移交取得 BGR 所有权，处理完后负责释放。
+
+线程边界：
+
+- Camera 只由采集线程调用 `get/release`；
+- `plate_recognizer_t` 只由识别线程使用；
+- `display_t` 只由主线程使用；
+- SIGINT/SIGTERM 只设置退出标志，条件等待每 100 ms 超时检查一次；
+- 退出时先关闭帧槽并 `pthread_join()` 两个工作线程，再停止摄像头、销毁识别器与显示器。
+
+每秒输出：
+
+```text
+FPS，平均转换/识别/显示耗时，端到端延迟，采集槽/显示槽丢帧数
+```
+
+2026-09-05 用户确认该多线程版本已在 RK3576 真机测试成功。本会话没有收到多线程版的具体 FPS/延迟/丢帧日志，后续不得编造具体数据；如需做性能对比，请用户提供一段真机输出。
+
+当前队列和车牌确认逻辑仍是该测试文件内的 `static` 实现，尚未抽取为正式可复用模块。
+
+### 4.8 Camera 实时车牌识别与 Gate 联动测试
+
+```text
+tests/test_realtime_plate_gate.c
+CMake 目标：test_realtime_plate_gate
+```
+
+该纯 C 测试复用多线程最新帧流水线，并将稳定车牌事件与 Gate 受控联动。默认运行是 dry-run，不访问 PWM：
+
+```bash
+./test_realtime_plate_gate
+```
+
+真实 Gate 必须使用显式参数，并在启动时阅读警告、人工输入 `ENABLE`；注意 `gate_create()` 会立即执行一次关闸初始化：
+
+```bash
+./test_realtime_plate_gate --enable-gate
+```
+
+联动语义：
+
+- 同一车牌连续识别 3 帧后才产生稳定确认事件并请求开闸；
+- Gate 只有处于 `CLOSED` 时才接受开闸请求，正在运动或已经打开时忽略重复请求；
+- 主线程周期调用 `gate_update()`，开/关动作保持非阻塞；
+- 开闸后，每一帧的任意有效车牌识别都会刷新 `last_plate_seen_us`；
+- 连续 10 秒没有识别到有效车牌时调用 `gate_close()`；
+- 关闸倒计时依据逐帧有效识别，而不是受 10 秒冷却限制的稳定确认事件，所以同一车牌持续在画面中会持续刷新倒计时；
+- dry-run 同样打印模拟开闸和模拟关闸，便于先验证业务逻辑；
+- 退出时先停止并 join 采集/识别线程，最后销毁 Camera、Recognizer、Display 和 Gate。
+
+真实 Gate 参数与 `tests/test_gate.c` 一致：
+
+```text
+pwmchip_path     = /sys/class/pwm/pwmchip2
+channel          = 0
+period_ns        = 20000000
+open_pulse_ns    = 2400000
+close_pulse_ns   = 1400000
+movement_time_ms = 800
+hold_after_move  = 0
+```
+
+2026-09-06 用户确认已在 RK3576 开发板真机测试成功：稳定识别车牌后真实 Gate 能开闸，连续 10 秒没有再次识别到车牌后能自动关闸。
+
+### 4.9 Gate
 
 ```text
 include/gate.h
@@ -320,7 +408,7 @@ Gate 命令非阻塞，必须周期调用 `gate_update()`。没有物理限位�
 - 重复 open/close 的返回语义不一致；
 - 无限位、防砸、地感、电流/堵转检测。
 
-### 4.8 主程序
+### 4.10 主程序
 
 `src/main.c` 仍基本只有：
 
@@ -353,30 +441,51 @@ cmake -S . -B build-rk3576-release \
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build-rk3576-release \
-  --target test_camera test_realtime_recognizer \
+  --target test_camera \
+           test_realtime_recognizer \
+           test_realtime_recognizer_threaded \
+           test_realtime_plate_gate \
   -j"$(nproc)"
 
 file build-rk3576-release/test_camera \
-     build-rk3576-release/test_realtime_recognizer
+     build-rk3576-release/test_realtime_recognizer \
+     build-rk3576-release/test_realtime_recognizer_threaded \
+     build-rk3576-release/test_realtime_plate_gate
 ```
 
-`test_camera` 和 `test_realtime_recognizer` 均已交叉编译为 ARM aarch64。`test_realtime_recognizer` 通过 `$ORIGIN/lib` 查找部署目录中的 `librknnrt.so`。真实硬件测试不要加入 CTest 或 CI 自动运行。
+四个目标均已交叉编译为 ARM aarch64。三个识别目标都通过 `$ORIGIN/lib` 查找部署目录中的 `librknnrt.so`。两个多线程目标使用 CMake `find_package(Threads REQUIRED)` 和 `Threads::Threads`。真实硬件测试不要加入 CTest 或 CI 自动运行。
+
+板端部署目录需要同时包含：
+
+```text
+test_realtime_plate_gate
+models/yolo26s-plate-detect-rk3576.rknn
+models/plate_rec_color-rk3576.rknn
+fonts/platech.ttf
+lib/librknnrt.so
+```
+
+从该目录运行：
+
+```bash
+./test_realtime_plate_gate
+# 明确启用真实 PWM 时：
+./test_realtime_plate_gate --enable-gate
+```
 
 ## 6. 当前 Git 工作树
 
-保存本文后，预期 dirty 状态至少包括：
+保存本文后实际观察到：
 
 ```text
-M  HANDOFF.md
 M  CMakeLists.txt
+M  HANDOFF.md
 M  include/camera.h
-M  tests/test_camera.c
-?? include/display.h
-?? include/image_convert.h
-?? src/display/
-?? src/image/
-?? tests/test_realtime_recognizer.c
+M  tests/test_realtime_recognizer_threaded.c
+?? tests/test_realtime_plate_gate.c
 ```
+
+`CMakeLists.txt` 新增了 `test_realtime_plate_gate` 构建目标；`tests/test_realtime_plate_gate.c` 是本阶段新增的联动测试。`include/camera.h` 和 `tests/test_realtime_recognizer_threaded.c` 也存在用户修改。以上均没有擅自清理，新会话应全部视为用户资产。
 
 这些均视为用户资产。绝对不要执行：
 
@@ -392,10 +501,12 @@ rm -rf build-rk3576-release
 
 ```bash
 git status --short
-git diff -- CMakeLists.txt include/camera.h tests/test_camera.c HANDOFF.md
+git diff -- CMakeLists.txt HANDOFF.md include/camera.h \
+  tests/test_realtime_recognizer_threaded.c
+git status --short tests/test_realtime_plate_gate.c
 ```
 
-未跟踪的 display/image 文件和 `tests/test_realtime_recognizer.c` 不会出现在普通 `git diff` 中，必须直接阅读。
+如新会话看到其他修改，视为用户在之后产生的资产，不得清理。
 
 ## 7. 当前卡点与未完成事项
 
@@ -403,38 +514,40 @@ git diff -- CMakeLists.txt include/camera.h tests/test_camera.c HANDOFF.md
 
 当前真正未完成：
 
-1. 连续多帧确认和相同车牌冷却去重尚待 RK3576 真机验证；
-2. 尚未决定每帧识别还是跳帧识别；
-3. 尚未实现采集/识别线程和容量 1～2 的最新帧队列；
+1. 最新帧槽、车牌确认/冷却和 Gate 联动仍是测试文件内部实现，尚未抽取为正式模块；
+2. 10 秒定时关闸没有限位、地感或防砸反馈，只适合有人看守的当前原型；
+3. 多线程版具体 FPS、延迟和丢帧数尚未记入文档；
 4. 尚未实现摄像头断开重连和完整错误统计；
 5. 尚未接入 LVGL；
-6. 尚未实现停车业务、数据库和网络层。
+6. 尚未实现入/出场状态机、SQLite、车位、MQTT、计费、支付和 OTA；
+7. `src/main.c` 仍是启动占位程序。
 
 ## 8. 下一步计划
 
-### 8.1 结果稳定与去重（待真机验证）
+### 8.1 受控 Gate 联动测试（已完成真机验证）
 
-已实现同一车牌 3 次确认、最多容忍 2 帧漏检和同车牌 10 秒冷却。下一步在 RK3576 上验证：持续展示同一车牌只产生一次确认事件；短暂遮挡不应误触发；切换新车牌能产生新事件；同车牌移出后在冷却期内重新出现不重复确认。
-
-### 8.2 性能与线程
-
-结果确认成功后再实现：
+已新增纯 C：
 
 ```text
-采集/转换线程
-    -> 容量 1（最多 2）的最新帧有界队列
-    -> 识别线程
-    -> 最新识别结果
-    -> UI/显示线程
+tests/test_realtime_plate_gate.c
+CMake 目标：test_realtime_plate_gate
 ```
 
-识别跟不上时丢旧帧，绝不能无限积压。随后增加连续多帧确认、相同车牌冷却、阈值/错误统计和摄像头断开重连。
+默认 dry-run 不触发 PWM；真实 Gate 必须由明确参数和人工输入 `ENABLE` 手动启用：
 
-### 8.3 LVGL 与业务
+```bash
+./test_realtime_plate_gate --enable-gate
+```
 
-正式 MIPI UI 使用 LVGL；`display.c` 保留为 fbdev 测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
+稳定确认开闸与连续 10 秒无有效车牌识别后自动关闸均已在 RK3576 开发板验证成功。不要直接修改 `src/main.c`，也不要破坏已成功的 `test_realtime_recognizer_threaded` 和 `test_realtime_plate_gate` 基准。
 
-再依次实现 SQLite、入出场状态机、车位、Gate 联动、计费、MQTT/JSON、后台、支付与 OTA。
+### 8.2 从测试抽取正式模块
+
+这是当前默认下一步：将帧槽、识别管线、车牌确认/冷却和 Gate 控制从测试文件中抽出到 `include/` 和 `src/`，定义清晰的启动、停止、车牌事件和 Gate 状态接口，再接入 `src/main.c`。
+
+### 8.3 停车业务与 UI
+
+随后建议顺序：入/出场状态机 -> SQLite/车位 -> LVGL -> MQTT/JSON -> 计费/支付 -> OTA。正式 MIPI UI 使用 LVGL；`display.c` 保留为 fbdev 测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
 
 ## 9. 绝对不要再踩的坑
 
@@ -461,7 +574,9 @@ get -> 转换/复制 BGR -> release CameraFrame
 
 ### 9.4 不要无限积压帧
 
-多线程只使用容量 1～2 的最新帧队列。识别慢时丢旧帧，不能让延迟和内存持续增长。
+多线程只使用容量 1～2 的最新帧队列。识别慢时丢旧帧，不能让延迟和内存持续增长。当前多线程测试的两个槽都是容量 1；新帧覆盖旧帧时必须先 `image_bgr_frame_release()` 旧帧。
+
+`CameraFrame.data` 永远不能跨线程入队。队列中只能放置已转换、拥有独立内存的 BGR 帧。消费者取走结构体后必须清空槽内结构，避免双重释放。
 
 ### 9.5 不要释放识别器错误字符串
 
@@ -498,6 +613,8 @@ polarity=inversed
 
 `gate_create()` 会立即关闸。不要把 `test_gate` 放入 CTest、CI、开机脚本或普通全量自动测试。
 
+识别/Gate 联动测试必须保持默认 dry-run，必须由明确参数和人工输入 `ENABLE` 才能启用真实 PWM。当前真实模式会在连续 10 秒没有有效车牌识别后自动关闸；没有传感器防砸，禁止放入 CTest、CI、开机脚本或无人看守环境。
+
 ### 9.10 不要错误处理 PWM 硬件
 
 - 不要猜其他板子的 `pwmchipN`；本板当前才是 `pwmchip2/pwm0`；
@@ -513,7 +630,7 @@ polarity=inversed
 
 ### 9.12 不要把规划写成已完成
 
-多线程、LVGL、SQLite、MQTT、停车计费、后台、支付、OTA 尚未完成。单线程摄像头实时识别已完成真机验证；连续多帧确认和相同车牌去重已实现但尚待真机验证。
+摄像头实时显示、单线程识别、多帧确认/去重、多线程最新帧识别、稳定车牌开闸和 10 秒无识别自动关闸均已真机验证。正式识别/Gate 管线模块、入出场业务、LVGL、SQLite、MQTT、计费、支付、OTA 尚未完成。
 
 ### 9.13 不要在同一个补丁中对同一路径同时 Delete/Add
 
@@ -539,6 +656,12 @@ git diff --check -- HANDOFF.md
 
 若补丁在校验阶段失败，应先确认原文件没有发生变化，再选择正确的补丁方式重试。
 
+### 9.14 多线程退出时不要先销毁硬件对象
+
+不要在采集线程仍可能调用 Camera、识别线程仍可能调用 RKNN 时就执行 `camera_stop()`、`camera_close()` 或 `plate_recognizer_destroy()`。正确顺序是设置停止状态、关闭帧槽/唤醒等待者、join 工作线程，最后销毁 Camera、Recognizer、Display 和同步原语。
+
+信号处理函数只做 `running = 0`，不要在信号处理函数里调用 pthread 条件变量、日志、RKNN、Camera 或内存释放函数。
+
 ## 10. 新会话开场检查清单
 
 用户新会话第一句话会是：
@@ -550,9 +673,10 @@ git diff --check -- HANDOFF.md
 读完后：
 
 1. 执行 `git status --short`，不要清理工作树；
-2. 阅读 `CMakeLists.txt`、`tests/test_camera.c`、`tests/test_realtime_recognizer.c`、`include/image_convert.h`、`src/image/image_convert.c`、`include/display.h`、`src/display/display.c`；
-3. 继续识别工作前再读 `include/plate_recognizer.h` 和 `tests/test_recognizer.cpp`；
-4. 承认当前真机事实：Gate 开关成功、静态图片识别成功、USB 摄像头实时显示到 MIPI 成功、单线程实时车牌识别闭环成功；
+2. 阅读 `CMakeLists.txt`、`tests/test_camera.c`、`tests/test_realtime_recognizer.c`、`tests/test_realtime_recognizer_threaded.c`、`tests/test_realtime_plate_gate.c`、`include/image_convert.h`、`src/image/image_convert.c`、`include/display.h`、`src/display/display.c`；
+3. 继续识别/Gate 工作前再读 `include/plate_recognizer.h`、`tests/test_recognizer.cpp`、`include/gate.h`、`src/gate/gate.c` 和 `tests/test_gate.c`；
+4. 承认当前真机事实：Gate 开关成功、静态图片识别成功、USB 摄像头实时显示到 MIPI 成功、单线程实时识别成功、多帧确认/去重成功、多线程最新帧识别成功、稳定车牌开闸成功、连续 10 秒无车牌识别自动关闸成功；
 5. 不要重新从摄像头/MIPI/PWM 是否存在开始排查，除非硬件变了；
-6. 默认下一步是在 RK3576 真机验证连续多帧确认和相同车牌冷却去重，验证成功后再进入最新帧队列和多线程；
-7. 修改前先向用户说明文件范围，避免擅自扩大修改。
+6. 默认下一步是从已验证测试中抽取正式识别/Gate 管线模块，再接入 `src/main.c`；
+7. 不要为了方便直接改坏 `test_camera.c`、`test_realtime_recognizer.c`、`test_realtime_recognizer_threaded.c` 或 `test_realtime_plate_gate.c`；
+8. 修改前先向用户说明文件范围，避免擅自扩大修改。

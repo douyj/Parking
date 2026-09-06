@@ -1,5 +1,6 @@
 #include "camera.h"
 #include "display.h"
+#include "gate.h"
 #include "image_convert.h"
 #include "log.h"
 #include "plate_recognizer.h"
@@ -10,6 +11,8 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -27,7 +30,17 @@
 #define REQUIRED_CONFIRM_FRAMES 3U
 #define MAX_MISSED_FRAMES 3U
 #define SAME_PLATE_COOLDOWN_US 10000000ULL
+#define GATE_AUTO_CLOSE_IDLE_US 10000000ULL
 #define QUEUE_WAIT_MS 100L
+#define GATE_INITIALIZE_TIMEOUT_MS 5000U
+
+#define GATE_PWMCHIP_PATH "/sys/class/pwm/pwmchip2"
+#define GATE_PWM_CHANNEL 0U
+#define GATE_PERIOD_NS 20000000ULL
+#define GATE_OPEN_PULSE_NS 2400000ULL
+#define GATE_CLOSE_PULSE_NS 1400000ULL
+#define GATE_MOVEMENT_TIME_MS 800U
+#define GATE_HOLD_AFTER_MOVE 0
 
 typedef struct {
     image_bgr_frame_t image;
@@ -36,7 +49,6 @@ typedef struct {
     uint64_t recognize_us;
 } pipeline_frame_t;
 
-// 最新帧槽结构体
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t condition;
@@ -44,25 +56,33 @@ typedef struct {
     uint64_t dropped_frames;
     int has_frame;
     int closed;
-} latest_frame_slot_t;  
+} latest_frame_slot_t;
 
-// 车牌确认结构体
 typedef struct {
-    char candidate_plate[PLATE_TEXT_CAPACITY];  // 候选车牌号
-    unsigned int consecutive_frames;    // 连续出现的帧数
-    unsigned int missed_frames;         // 漏掉的帧数
-    int candidate_confirmed;            // 候选车牌是否已确认 
-    char last_confirmed_plate[PLATE_TEXT_CAPACITY];  // 上一次确认的车牌号
-    uint64_t last_confirmed_us;        // 上一次确认的时间戳
+    char candidate_plate[PLATE_TEXT_CAPACITY];
+    unsigned int consecutive_frames;
+    unsigned int missed_frames;
+    int candidate_confirmed;
+    char last_confirmed_plate[PLATE_TEXT_CAPACITY];
+    uint64_t last_confirmed_us;
 } plate_confirmation_t;
 
-// 三线程管道结构体
+typedef struct {
+    char plate_number[PLATE_TEXT_CAPACITY];
+    char color_name[PLATE_COLOR_CAPACITY];
+    float detect_confidence;
+    float color_confidence;
+} plate_event_t;
+
 typedef struct {
     Camera *camera;
     plate_recognizer_t *recognizer;
     latest_frame_slot_t captured_frames;
-    latest_frame_slot_t annotated_frames;   
+    latest_frame_slot_t annotated_frames;
     pthread_mutex_t state_mutex;
+    plate_event_t pending_event;
+    uint64_t last_plate_seen_us;
+    int has_pending_event;
     int failed;
 } pipeline_t;
 
@@ -74,7 +94,6 @@ static void handle_signal(int signal_number)
     running = 0;
 }
 
-// 用来测量程序运行耗时
 static uint64_t monotonic_us(void)
 {
     struct timespec now;
@@ -85,23 +104,33 @@ static uint64_t monotonic_us(void)
            (uint64_t)now.tv_nsec / 1000ULL;
 }
 
-// 给程序注册退出信号处理函数
+static void sleep_ms(unsigned int milliseconds)
+{
+    struct timespec duration;
+
+    duration.tv_sec = milliseconds / 1000U;
+    duration.tv_nsec = (long)(milliseconds % 1000U) * 1000000L;
+    while (nanosleep(&duration, &duration) < 0 && errno == EINTR) {
+        if (!running)
+            break;
+    }
+}
+
 static int install_signal_handlers(void)
 {
     struct sigaction action;
 
     memset(&action, 0, sizeof(action));
-    action.sa_handler = handle_signal;      // 设置处理函数
-    sigemptyset(&action.sa_mask);       // 不屏蔽任何信号
-    if (sigaction(SIGINT, &action, NULL) < 0 ||     // ctrl + c
-        sigaction(SIGTERM, &action, NULL) < 0) {    // kill 命令
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGINT, &action, NULL) < 0 ||
+        sigaction(SIGTERM, &action, NULL) < 0) {
         LOG_ERROR("安装退出信号处理失败: %s", strerror(errno));
         return -1;
     }
     return 0;
 }
 
-// 释放一帧图像占用的资源
 static void pipeline_frame_release(pipeline_frame_t *frame)
 {
     if (frame == NULL)
@@ -110,7 +139,6 @@ static void pipeline_frame_release(pipeline_frame_t *frame)
     memset(frame, 0, sizeof(*frame));
 }
 
-// 初始化一个“最新帧槽”对象，主要把结构体清零，再初始化互斥锁和条件变量
 static int latest_frame_slot_init(latest_frame_slot_t *slot)
 {
     int error;
@@ -130,7 +158,6 @@ static int latest_frame_slot_init(latest_frame_slot_t *slot)
     return 0;
 }
 
-// 关闭一个“最新帧槽”对象，将所有等待的线程唤醒
 static void latest_frame_slot_close(latest_frame_slot_t *slot)
 {
     pthread_mutex_lock(&slot->mutex);
@@ -139,7 +166,6 @@ static void latest_frame_slot_close(latest_frame_slot_t *slot)
     pthread_mutex_unlock(&slot->mutex);
 }
 
-// 销毁“最新帧槽”，释放里面还没处理完的图像资源，然后销毁条件变量和互斥锁
 static void latest_frame_slot_destroy(latest_frame_slot_t *slot)
 {
     pipeline_frame_release(&slot->frame);
@@ -147,7 +173,7 @@ static void latest_frame_slot_destroy(latest_frame_slot_t *slot)
     pthread_mutex_destroy(&slot->mutex);
 }
 
-/* 把一帧图像塞进“最新帧槽”里 */
+/* 成功转移所有权返回 1；帧槽已关闭返回 0；失败返回 -1。 */
 static int latest_frame_slot_push(latest_frame_slot_t *slot,
                                   pipeline_frame_t *frame)
 {
@@ -157,26 +183,22 @@ static int latest_frame_slot_push(latest_frame_slot_t *slot,
         LOG_ERROR("锁定帧槽失败: %s", strerror(error));
         return -1;
     }
-
     if (slot->closed) {
         pthread_mutex_unlock(&slot->mutex);
         return 0;
     }
-
     if (slot->has_frame) {
-        pipeline_frame_release(&slot->frame);   // 如果槽里有帧，释放旧帧资源
-        ++slot->dropped_frames;                // 增加漏掉帧数
+        pipeline_frame_release(&slot->frame);
+        ++slot->dropped_frames;
     }
-
-    slot->frame = *frame;       // 把新帧放进 slot
+    slot->frame = *frame;
     memset(frame, 0, sizeof(*frame));
-    slot->has_frame = 1;       // 标记槽里有帧
-    pthread_cond_signal(&slot->condition);      //新帧到了，叫醒一个正在等帧的线程
+    slot->has_frame = 1;
+    pthread_cond_signal(&slot->condition);
     pthread_mutex_unlock(&slot->mutex);
     return 1;
 }
 
-// 算出“现在 + 100ms”的绝对时间，作为条件变量等待的超时时刻
 static void make_wait_deadline(struct timespec *deadline)
 {
     clock_gettime(CLOCK_REALTIME, deadline);
@@ -187,7 +209,7 @@ static void make_wait_deadline(struct timespec *deadline)
     }
 }
 
-/* 取到帧返回 1；已关闭或程序退出返回 0。 */
+/* 取到帧返回 1；已关闭或程序退出返回 0；失败返回 -1。 */
 static int latest_frame_slot_take(latest_frame_slot_t *slot,
                                   pipeline_frame_t *frame)
 {
@@ -197,20 +219,18 @@ static int latest_frame_slot_take(latest_frame_slot_t *slot,
         LOG_ERROR("锁定帧槽失败: %s", strerror(error));
         return -1;
     }
-    
-    //如果没有帧，就等待
     while (!slot->has_frame && !slot->closed && running) {
         struct timespec deadline;
 
         make_wait_deadline(&deadline);
-        error = pthread_cond_timedwait(&slot->condition, &slot->mutex, &deadline);
+        error = pthread_cond_timedwait(
+            &slot->condition, &slot->mutex, &deadline);
         if (error != 0 && error != ETIMEDOUT) {
             pthread_mutex_unlock(&slot->mutex);
             LOG_ERROR("等待最新帧失败: %s", strerror(error));
             return -1;
         }
     }
-
     if (!slot->has_frame) {
         pthread_mutex_unlock(&slot->mutex);
         return 0;
@@ -222,7 +242,6 @@ static int latest_frame_slot_take(latest_frame_slot_t *slot,
     return 1;
 }
 
-// 获取“最新帧槽”里漏掉的帧数
 static uint64_t latest_frame_slot_dropped(latest_frame_slot_t *slot)
 {
     uint64_t dropped;
@@ -255,29 +274,82 @@ static int pipeline_failed(pipeline_t *pipeline)
     return failed;
 }
 
-// 从一次车牌识别得到的多个结果里，挑出“最可信”的那个结果
-static const plate_result_t *find_best_result(const plate_result_t *results, int result_count)
+static void pipeline_publish_plate_event(pipeline_t *pipeline,
+                                         const plate_result_t *result)
+{
+    pthread_mutex_lock(&pipeline->state_mutex);
+    strncpy(pipeline->pending_event.plate_number, result->plate_number,
+            PLATE_TEXT_CAPACITY - 1U);
+    pipeline->pending_event.plate_number[PLATE_TEXT_CAPACITY - 1U] = '\0';
+    strncpy(pipeline->pending_event.color_name, result->color_name,
+            PLATE_COLOR_CAPACITY - 1U);
+    pipeline->pending_event.color_name[PLATE_COLOR_CAPACITY - 1U] = '\0';
+    pipeline->pending_event.detect_confidence = result->detect_confidence;
+    pipeline->pending_event.color_confidence = result->color_confidence;
+    pipeline->has_pending_event = 1;
+    pthread_mutex_unlock(&pipeline->state_mutex);
+}
+
+static void pipeline_mark_plate_seen(pipeline_t *pipeline,
+                                     uint64_t seen_us)
+{
+    pthread_mutex_lock(&pipeline->state_mutex);
+    pipeline->last_plate_seen_us = seen_us;
+    pthread_mutex_unlock(&pipeline->state_mutex);
+}
+
+static uint64_t pipeline_last_plate_seen(pipeline_t *pipeline)
+{
+    uint64_t seen_us;
+
+    pthread_mutex_lock(&pipeline->state_mutex);
+    seen_us = pipeline->last_plate_seen_us;
+    pthread_mutex_unlock(&pipeline->state_mutex);
+    return seen_us;
+}
+
+static int pipeline_take_plate_event(pipeline_t *pipeline,
+                                     plate_event_t *event)
+{
+    int has_event;
+
+    pthread_mutex_lock(&pipeline->state_mutex);
+    has_event = pipeline->has_pending_event;
+    if (has_event) {
+        *event = pipeline->pending_event;
+        memset(&pipeline->pending_event, 0,
+               sizeof(pipeline->pending_event));
+        pipeline->has_pending_event = 0;
+    }
+    pthread_mutex_unlock(&pipeline->state_mutex);
+    return has_event;
+}
+
+static const plate_result_t *find_best_result(
+    const plate_result_t *results, int result_count)
 {
     const plate_result_t *best = NULL;
 
     for (int i = 0; i < result_count; ++i) {
         if (results[i].plate_number[0] == '\0')
             continue;
-        if (best == NULL ||results[i].detect_confidence > best->detect_confidence)
+        if (best == NULL ||
+            results[i].detect_confidence > best->detect_confidence)
             best = &results[i];
     }
     return best;
 }
 
-// 把一个车牌字符串安全地复制到目标数组里，并确保最后一定有 \0 结尾。
-static void copy_plate_number(char destination[PLATE_TEXT_CAPACITY], const char *source)
+static void copy_plate_number(char destination[PLATE_TEXT_CAPACITY],
+                              const char *source)
 {
     strncpy(destination, source, PLATE_TEXT_CAPACITY - 1U);
     destination[PLATE_TEXT_CAPACITY - 1U] = '\0';
 }
 
-// 判断某个车牌是否连续稳定出现了足够多帧，从而认为它真的识别成功
-static int update_plate_confirmation(plate_confirmation_t *state, const plate_result_t *result, uint64_t now_us)
+static int update_plate_confirmation(plate_confirmation_t *state,
+                                     const plate_result_t *result,
+                                     uint64_t now_us)
 {
     if (result == NULL) {
         if (state->missed_frames < MAX_MISSED_FRAMES)
@@ -313,22 +385,21 @@ static int update_plate_confirmation(plate_confirmation_t *state, const plate_re
     return 1;
 }
 
-// 捕获线程，负责从相机获取图像并转换为 BGR 格式
 static void *capture_thread_main(void *argument)
 {
     pipeline_t *pipeline = argument;
 
     while (running) {
-        CameraFrame camera_frame;           // 相机获取的原始图像帧
-        pipeline_frame_t output;            // 转换之后准备交给识别线程的帧
-        uint64_t convert_started_us;        // 记录图像转换开始时间
+        CameraFrame camera_frame;
+        pipeline_frame_t output;
+        uint64_t convert_started_us;
         int convert_result;
         int release_result;
         int push_result;
 
         memset(&camera_frame, 0, sizeof(camera_frame));
         memset(&output, 0, sizeof(output));
-        output.started_us = monotonic_us();         // 记录帧开始处理的时间戳
+        output.started_us = monotonic_us();
 
         if (camera_get_frame(pipeline->camera, &camera_frame, 1000) != 0) {
             if (!running)
@@ -341,14 +412,14 @@ static void *capture_thread_main(void *argument)
         convert_result = image_convert_to_bgr(&camera_frame, &output.image);
         output.convert_us = monotonic_us() - convert_started_us;
         release_result = camera_release_frame(pipeline->camera, &camera_frame);
-
         if (convert_result != 0 || release_result != 0) {
             pipeline_frame_release(&output);
             pipeline_request_stop(pipeline, 1);
             break;
         }
 
-        push_result = latest_frame_slot_push(&pipeline->captured_frames, &output);
+        push_result = latest_frame_slot_push(&pipeline->captured_frames,
+                                             &output);
         if (push_result != 1) {
             pipeline_frame_release(&output);
             if (push_result < 0)
@@ -361,8 +432,6 @@ static void *capture_thread_main(void *argument)
     return NULL;
 }
 
-
-// 识别线程，负责对捕获到的图像进行车牌识别
 static void *recognition_thread_main(void *argument)
 {
     pipeline_t *pipeline = argument;
@@ -370,23 +439,27 @@ static void *recognition_thread_main(void *argument)
 
     memset(&confirmation, 0, sizeof(confirmation));
     while (running) {
-        pipeline_frame_t frame;                     // 这次要识别的图像
-        plate_result_t results[PLATE_MAX_RESULTS];  // 模型识别出来的多个车牌结果
-        const plate_result_t *best_result;          // 这些结果里置信度最高的那个
-        uint64_t recognize_started_us;              // 开始识别的时间
-        int take_result;                            // 从帧槽取帧是否成功   
+        pipeline_frame_t frame;
+        plate_result_t results[PLATE_MAX_RESULTS];
+        const plate_result_t *best_result;
+        uint64_t recognize_started_us;
+        uint64_t recognized_at_us;
+        int take_result;
         int result_count;
         int push_result;
 
         memset(&frame, 0, sizeof(frame));
-        take_result = latest_frame_slot_take(&pipeline->captured_frames, &frame);
+        take_result = latest_frame_slot_take(&pipeline->captured_frames,
+                                             &frame);
         if (take_result != 1) {
             if (take_result < 0)
                 pipeline_request_stop(pipeline, 1);
             break;
         }
 
-        if (frame.image.width > INT_MAX || frame.image.height > INT_MAX || frame.image.stride > INT_MAX) {
+        if (frame.image.width > INT_MAX ||
+            frame.image.height > INT_MAX ||
+            frame.image.stride > INT_MAX) {
             LOG_ERROR("图像尺寸超出识别器支持范围");
             pipeline_frame_release(&frame);
             pipeline_request_stop(pipeline, 1);
@@ -399,39 +472,46 @@ static void *recognition_thread_main(void *argument)
             (int)frame.image.width, (int)frame.image.height,
             (int)frame.image.stride, DEFAULT_CONFIDENCE_THRESHOLD,
             results, PLATE_MAX_RESULTS);
-        frame.recognize_us = monotonic_us() - recognize_started_us;     // 记录识别耗时
-
+        frame.recognize_us = monotonic_us() - recognize_started_us;
         if (result_count < 0) {
-            const char *error = plate_recognizer_last_error(pipeline->recognizer);
-            LOG_ERROR("车牌识别失败: %s", error != NULL ? error : "未知错误");
+            const char *error =
+                plate_recognizer_last_error(pipeline->recognizer);
+            LOG_ERROR("车牌识别失败: %s",
+                      error != NULL ? error : "未知错误");
             pipeline_frame_release(&frame);
             pipeline_request_stop(pipeline, 1);
             break;
         }
 
         best_result = find_best_result(results, result_count);
-        // 连续帧确认
-        if (update_plate_confirmation(&confirmation, best_result, monotonic_us())) {
+        recognized_at_us = monotonic_us();
+        if (best_result != NULL)
+            pipeline_mark_plate_seen(pipeline, recognized_at_us);
+        if (update_plate_confirmation(
+                &confirmation, best_result, recognized_at_us)) {
             LOG_INFO("确认车牌=%s, 颜色=%s, 检测置信度=%.2f, "
                      "颜色置信度=%.2f",
                      best_result->plate_number, best_result->color_name,
                      best_result->detect_confidence,
                      best_result->color_confidence);
+            pipeline_publish_plate_event(pipeline, best_result);
         }
 
-        // 在当前图像上画识别结果
         if (plate_recognizer_draw(
                 pipeline->recognizer, frame.image.data,
                 (int)frame.image.width, (int)frame.image.height,
                 (int)frame.image.stride, results, result_count) != 0) {
-            const char *error = plate_recognizer_last_error(pipeline->recognizer);
-            LOG_ERROR("绘制识别结果失败: %s", error != NULL ? error : "未知错误");
+            const char *error =
+                plate_recognizer_last_error(pipeline->recognizer);
+            LOG_ERROR("绘制识别结果失败: %s",
+                      error != NULL ? error : "未知错误");
             pipeline_frame_release(&frame);
             pipeline_request_stop(pipeline, 1);
             break;
         }
 
-        push_result = latest_frame_slot_push(&pipeline->annotated_frames, &frame);
+        push_result = latest_frame_slot_push(&pipeline->annotated_frames,
+                                             &frame);
         if (push_result != 1) {
             pipeline_frame_release(&frame);
             if (push_result < 0)
@@ -444,9 +524,152 @@ static void *recognition_thread_main(void *argument)
     return NULL;
 }
 
+static const char *gate_state_to_string(gate_state_t state)
+{
+    switch (state) {
+    case GATE_STATE_CLOSED:
+        return "CLOSED";
+    case GATE_STATE_OPENING:
+        return "OPENING";
+    case GATE_STATE_OPEN:
+        return "OPEN";
+    case GATE_STATE_CLOSING:
+        return "CLOSING";
+    case GATE_STATE_ERROR:
+        return "ERROR";
+    default:
+        return "UNKNOWN";
+    }
+}
 
+static int confirm_real_gate(void)
+{
+    char answer[32];
 
-static int display_frames(pipeline_t *pipeline, display_t *display)
+    fprintf(stderr,
+            "\n警告：即将启用真实 Gate。gate_create() 会立即执行关闸。\n"
+            "当前系统没有限位、地感或防砸传感器；连续 10 秒没有识别到车牌时会自动关闸。\n"
+            "确认周围无人、无车且机构可以安全运动后，输入 ENABLE 继续：");
+    fflush(stderr);
+    if (fgets(answer, sizeof(answer), stdin) == NULL)
+        return 0;
+    answer[strcspn(answer, "\r\n")] = '\0';
+    return strcmp(answer, "ENABLE") == 0;
+}
+
+static gate_t *create_real_gate(void)
+{
+    gate_config_t config;
+    gate_t *gate;
+    uint64_t started_us;
+
+    memset(&config, 0, sizeof(config));
+    config.pwmchip_path = GATE_PWMCHIP_PATH;
+    config.channel = GATE_PWM_CHANNEL;
+    config.period_ns = GATE_PERIOD_NS;
+    config.open_pulse_ns = GATE_OPEN_PULSE_NS;
+    config.close_pulse_ns = GATE_CLOSE_PULSE_NS;
+    config.movement_time_ms = GATE_MOVEMENT_TIME_MS;
+    config.hold_after_move = GATE_HOLD_AFTER_MOVE;
+
+    LOG_INFO("启用真实 Gate: %s/pwm%u, period=%llu ns, "
+             "open=%llu ns, close=%llu ns, movement=%u ms",
+             config.pwmchip_path, config.channel,
+             (unsigned long long)config.period_ns,
+             (unsigned long long)config.open_pulse_ns,
+             (unsigned long long)config.close_pulse_ns,
+             config.movement_time_ms);
+    gate = gate_create(&config);
+    if (gate == NULL) {
+        LOG_ERROR("创建真实 Gate 失败");
+        return NULL;
+    }
+
+    started_us = monotonic_us();
+    while (running &&
+           (gate_get_state(gate) == GATE_STATE_OPENING ||
+            gate_get_state(gate) == GATE_STATE_CLOSING)) {
+        if (gate_update(gate) != GATE_OK) {
+            LOG_ERROR("初始化 Gate 失败: %s", gate_last_error(gate));
+            gate_destroy(gate);
+            return NULL;
+        }
+        if (monotonic_us() - started_us >=
+            (uint64_t)GATE_INITIALIZE_TIMEOUT_MS * 1000ULL) {
+            LOG_ERROR("等待 Gate 初始化超时");
+            gate_destroy(gate);
+            return NULL;
+        }
+        sleep_ms(20U);
+    }
+    if (!running) {
+        gate_destroy(gate);
+        return NULL;
+    }
+    LOG_INFO("Gate 初始化完成，状态=%s",
+             gate_state_to_string(gate_get_state(gate)));
+    return gate;
+}
+
+static int handle_gate(pipeline_t *pipeline, gate_t *gate,
+                       int enable_gate, int *dry_gate_open)
+{
+    plate_event_t event;
+    uint64_t last_seen_us;
+    uint64_t now_us;
+
+    if (enable_gate && gate_update(gate) != GATE_OK) {
+        LOG_ERROR("更新 Gate 状态失败: %s", gate_last_error(gate));
+        return -1;
+    }
+    while (pipeline_take_plate_event(pipeline, &event)) {
+        if (!enable_gate) {
+            LOG_INFO("[DRY-RUN] 稳定车牌 %s -> 模拟开闸",
+                     event.plate_number);
+            *dry_gate_open = 1;
+            continue;
+        }
+
+        if (gate_get_state(gate) != GATE_STATE_CLOSED) {
+            LOG_INFO("车牌 %s 请求开闸，但 Gate 状态=%s，忽略重复请求",
+                     event.plate_number,
+                     gate_state_to_string(gate_get_state(gate)));
+            continue;
+        }
+        if (gate_open(gate) != GATE_OK) {
+            LOG_ERROR("车牌 %s 请求开闸失败: %s",
+                      event.plate_number, gate_last_error(gate));
+            return -1;
+        }
+        LOG_INFO("车牌 %s 已触发真实开闸；连续 10 秒未识别到车牌将自动关闸",
+                 event.plate_number);
+    }
+
+    last_seen_us = pipeline_last_plate_seen(pipeline);
+    now_us = monotonic_us();
+    if (last_seen_us == 0 || now_us - last_seen_us < GATE_AUTO_CLOSE_IDLE_US)
+        return 0;
+
+    if (!enable_gate) {
+        if (*dry_gate_open) {
+            LOG_INFO("[DRY-RUN] 连续 10 秒未识别到车牌 -> 模拟关闸");
+            *dry_gate_open = 0;
+        }
+        return 0;
+    }
+
+    if (gate_get_state(gate) == GATE_STATE_OPEN) {
+        if (gate_close(gate) != GATE_OK) {
+            LOG_ERROR("自动关闸失败: %s", gate_last_error(gate));
+            return -1;
+        }
+        LOG_INFO("连续 10 秒未识别到车牌，已触发自动关闸");
+    }
+    return 0;
+}
+
+static int display_frames(pipeline_t *pipeline, display_t *display,
+                          gate_t *gate, int enable_gate)
 {
     uint64_t report_started_us = monotonic_us();
     uint64_t total_convert_us = 0;
@@ -456,6 +679,7 @@ static int display_frames(pipeline_t *pipeline, display_t *display)
     uint64_t previous_capture_drops = 0;
     uint64_t previous_display_drops = 0;
     unsigned int displayed_frames = 0;
+    int dry_gate_open = 0;
 
     while (running) {
         pipeline_frame_t frame;
@@ -464,6 +688,12 @@ static int display_frames(pipeline_t *pipeline, display_t *display)
         uint64_t display_us;
         uint64_t now_us;
         int take_result;
+
+        if (handle_gate(pipeline, gate, enable_gate,
+                        &dry_gate_open) != 0) {
+            pipeline_request_stop(pipeline, 1);
+            break;
+        }
 
         memset(&frame, 0, sizeof(frame));
         take_result = latest_frame_slot_take(
@@ -530,16 +760,27 @@ static int display_frames(pipeline_t *pipeline, display_t *display)
     return pipeline_failed(pipeline) ? -1 : 0;
 }
 
-int main(void)
+static void print_usage(const char *program)
+{
+    fprintf(stderr,
+            "用法: %s [--enable-gate]\n"
+            "  默认模式       模拟开闸，并在 10 秒无车牌后模拟关闸\n"
+            "  --enable-gate  人工确认后驱动真实 Gate，并启用定时关闸\n",
+            program);
+}
+
+int main(int argc, char **argv)
 {
     Camera camera;
     CameraConfig camera_config;
     display_config_t display_config;
     display_t *display = NULL;
     plate_recognizer_t *recognizer = NULL;
+    gate_t *gate = NULL;
     pipeline_t pipeline;
     pthread_t capture_thread;
     pthread_t recognition_thread;
+    int enable_gate = 0;
     int state_mutex_initialized = 0;
     int captured_slot_initialized = 0;
     int annotated_slot_initialized = 0;
@@ -550,10 +791,26 @@ int main(void)
     int exit_code = 1;
     int error;
 
+    if (argc == 2 && strcmp(argv[1], "--enable-gate") == 0) {
+        enable_gate = 1;
+    } else if (argc == 2 &&
+               (strcmp(argv[1], "--help") == 0 ||
+                strcmp(argv[1], "-h") == 0)) {
+        print_usage(argv[0]);
+        return 0;
+    } else if (argc != 1) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
     memset(&camera, 0, sizeof(camera));
     memset(&pipeline, 0, sizeof(pipeline));
     if (install_signal_handlers() != 0)
         return 1;
+    if (enable_gate && !confirm_real_gate()) {
+        LOG_INFO("未确认启用真实 Gate，程序退出");
+        return 1;
+    }
 
     error = pthread_mutex_init(&pipeline.state_mutex, NULL);
     if (error != 0) {
@@ -569,8 +826,7 @@ int main(void)
     annotated_slot_initialized = 1;
 
     recognizer = plate_recognizer_create(
-        DEFAULT_DETECT_MODEL,
-        DEFAULT_RECOGNITION_MODEL,
+        DEFAULT_DETECT_MODEL, DEFAULT_RECOGNITION_MODEL,
         DEFAULT_FONT_PATH);
     if (recognizer == NULL) {
         LOG_ERROR("创建车牌识别器失败");
@@ -591,7 +847,6 @@ int main(void)
     if (camera_open(&camera, &camera_config) != 0)
         goto cleanup;
     camera_opened = 1;
-
     if (camera.pixel_format != V4L2_PIX_FMT_MJPEG &&
         camera.pixel_format != V4L2_PIX_FMT_YUYV) {
         LOG_ERROR("摄像头实际格式不受支持: 0x%08x",
@@ -602,9 +857,14 @@ int main(void)
         goto cleanup;
     camera_started = 1;
 
+    if (enable_gate) {
+        gate = create_real_gate();
+        if (gate == NULL)
+            goto cleanup;
+    }
+
     pipeline.camera = &camera;
     pipeline.recognizer = recognizer;
-
     error = pthread_create(&recognition_thread, NULL,
                            recognition_thread_main, &pipeline);
     if (error != 0) {
@@ -621,10 +881,13 @@ int main(void)
     }
     capture_thread_created = 1;
 
-    LOG_INFO("开始多线程实时车牌识别: %ux%u@%u，"
+    LOG_INFO("开始车牌/Gate 联动测试: %ux%u@%u，模式=%s，"
              "按 Ctrl+C 退出",
-             camera.width, camera.height, camera.fps);
-    exit_code = display_frames(&pipeline, display) == 0 ? 0 : 1;
+             camera.width, camera.height, camera.fps,
+             enable_gate ? "真实 Gate（10 秒无车牌自动关闸）" :
+                           "DRY-RUN");
+    exit_code = display_frames(&pipeline, display, gate,
+                               enable_gate) == 0 ? 0 : 1;
 
 cleanup:
     if (captured_slot_initialized && annotated_slot_initialized)
@@ -641,6 +904,7 @@ cleanup:
         camera_close(&camera);
     display_destroy(display);
     plate_recognizer_destroy(recognizer);
+    gate_destroy(gate);
     if (annotated_slot_initialized)
         latest_frame_slot_destroy(&pipeline.annotated_frames);
     if (captured_slot_initialized)
