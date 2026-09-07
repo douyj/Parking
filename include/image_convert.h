@@ -9,12 +9,13 @@
 extern "C" {
 #endif
 
+// BGR888 图像数据结构体
 typedef struct {
-    unsigned char *data;
-    size_t size;
-    unsigned int width;
-    unsigned int height;
-    unsigned int stride;
+    unsigned char *data;        // 真正的图像像素数据
+    size_t size;                // 整张图像数据一共有多少字节
+    unsigned int width;         // 图像宽度
+    unsigned int height;        // 图像高度
+    unsigned int stride;        // 图像每一行在内存里实际占多少字节
 } image_bgr_frame_t;
 
 /* 将 MJPG 或 YUYV CameraFrame 转换为调用者拥有的 BGR888 图像。 */
