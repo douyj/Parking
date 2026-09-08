@@ -2,7 +2,10 @@
 #include "display.h"
 #include "gate.h"
 #include "image_convert.h"
+#include "latest_frame_slot.h"
 #include "log.h"
+#include "plate_confirmation.h"
+#include "pipeline_frame.h"
 #include "plate_recognizer.h"
 
 #include <errno.h>
@@ -31,7 +34,7 @@
 #define MAX_MISSED_FRAMES 3U
 #define SAME_PLATE_COOLDOWN_US 10000000ULL
 #define GATE_AUTO_CLOSE_IDLE_US 10000000ULL
-#define QUEUE_WAIT_MS 100L
+#define QUEUE_WAIT_MS 100
 #define GATE_INITIALIZE_TIMEOUT_MS 5000U
 
 #define GATE_PWMCHIP_PATH "/sys/class/pwm/pwmchip2"
@@ -43,31 +46,6 @@
 #define GATE_HOLD_AFTER_MOVE 0
 
 typedef struct {
-    image_bgr_frame_t image;
-    uint64_t started_us;
-    uint64_t convert_us;
-    uint64_t recognize_us;
-} pipeline_frame_t;
-
-typedef struct {
-    pthread_mutex_t mutex;
-    pthread_cond_t condition;
-    pipeline_frame_t frame;
-    uint64_t dropped_frames;
-    int has_frame;
-    int closed;
-} latest_frame_slot_t;
-
-typedef struct {
-    char candidate_plate[PLATE_TEXT_CAPACITY];
-    unsigned int consecutive_frames;
-    unsigned int missed_frames;
-    int candidate_confirmed;
-    char last_confirmed_plate[PLATE_TEXT_CAPACITY];
-    uint64_t last_confirmed_us;
-} plate_confirmation_t;
-
-typedef struct {
     char plate_number[PLATE_TEXT_CAPACITY];
     char color_name[PLATE_COLOR_CAPACITY];
     float detect_confidence;
@@ -77,8 +55,8 @@ typedef struct {
 typedef struct {
     Camera *camera;
     plate_recognizer_t *recognizer;
-    latest_frame_slot_t captured_frames;
-    latest_frame_slot_t annotated_frames;
+    latest_frame_slot_t *captured_frames;
+    latest_frame_slot_t *annotated_frames;
     pthread_mutex_t state_mutex;
     plate_event_t pending_event;
     uint64_t last_plate_seen_us;
@@ -131,127 +109,6 @@ static int install_signal_handlers(void)
     return 0;
 }
 
-static void pipeline_frame_release(pipeline_frame_t *frame)
-{
-    if (frame == NULL)
-        return;
-    image_bgr_frame_release(&frame->image);
-    memset(frame, 0, sizeof(*frame));
-}
-
-static int latest_frame_slot_init(latest_frame_slot_t *slot)
-{
-    int error;
-
-    memset(slot, 0, sizeof(*slot));
-    error = pthread_mutex_init(&slot->mutex, NULL);
-    if (error != 0) {
-        LOG_ERROR("初始化帧槽互斥锁失败: %s", strerror(error));
-        return -1;
-    }
-    error = pthread_cond_init(&slot->condition, NULL);
-    if (error != 0) {
-        LOG_ERROR("初始化帧槽条件变量失败: %s", strerror(error));
-        pthread_mutex_destroy(&slot->mutex);
-        return -1;
-    }
-    return 0;
-}
-
-static void latest_frame_slot_close(latest_frame_slot_t *slot)
-{
-    pthread_mutex_lock(&slot->mutex);
-    slot->closed = 1;
-    pthread_cond_broadcast(&slot->condition);
-    pthread_mutex_unlock(&slot->mutex);
-}
-
-static void latest_frame_slot_destroy(latest_frame_slot_t *slot)
-{
-    pipeline_frame_release(&slot->frame);
-    pthread_cond_destroy(&slot->condition);
-    pthread_mutex_destroy(&slot->mutex);
-}
-
-/* 成功转移所有权返回 1；帧槽已关闭返回 0；失败返回 -1。 */
-static int latest_frame_slot_push(latest_frame_slot_t *slot,
-                                  pipeline_frame_t *frame)
-{
-    int error = pthread_mutex_lock(&slot->mutex);
-
-    if (error != 0) {
-        LOG_ERROR("锁定帧槽失败: %s", strerror(error));
-        return -1;
-    }
-    if (slot->closed) {
-        pthread_mutex_unlock(&slot->mutex);
-        return 0;
-    }
-    if (slot->has_frame) {
-        pipeline_frame_release(&slot->frame);
-        ++slot->dropped_frames;
-    }
-    slot->frame = *frame;
-    memset(frame, 0, sizeof(*frame));
-    slot->has_frame = 1;
-    pthread_cond_signal(&slot->condition);
-    pthread_mutex_unlock(&slot->mutex);
-    return 1;
-}
-
-static void make_wait_deadline(struct timespec *deadline)
-{
-    clock_gettime(CLOCK_REALTIME, deadline);
-    deadline->tv_nsec += QUEUE_WAIT_MS * 1000000L;
-    if (deadline->tv_nsec >= 1000000000L) {
-        ++deadline->tv_sec;
-        deadline->tv_nsec -= 1000000000L;
-    }
-}
-
-/* 取到帧返回 1；已关闭或程序退出返回 0；失败返回 -1。 */
-static int latest_frame_slot_take(latest_frame_slot_t *slot,
-                                  pipeline_frame_t *frame)
-{
-    int error = pthread_mutex_lock(&slot->mutex);
-
-    if (error != 0) {
-        LOG_ERROR("锁定帧槽失败: %s", strerror(error));
-        return -1;
-    }
-    while (!slot->has_frame && !slot->closed && running) {
-        struct timespec deadline;
-
-        make_wait_deadline(&deadline);
-        error = pthread_cond_timedwait(
-            &slot->condition, &slot->mutex, &deadline);
-        if (error != 0 && error != ETIMEDOUT) {
-            pthread_mutex_unlock(&slot->mutex);
-            LOG_ERROR("等待最新帧失败: %s", strerror(error));
-            return -1;
-        }
-    }
-    if (!slot->has_frame) {
-        pthread_mutex_unlock(&slot->mutex);
-        return 0;
-    }
-    *frame = slot->frame;
-    memset(&slot->frame, 0, sizeof(slot->frame));
-    slot->has_frame = 0;
-    pthread_mutex_unlock(&slot->mutex);
-    return 1;
-}
-
-static uint64_t latest_frame_slot_dropped(latest_frame_slot_t *slot)
-{
-    uint64_t dropped;
-
-    pthread_mutex_lock(&slot->mutex);
-    dropped = slot->dropped_frames;
-    pthread_mutex_unlock(&slot->mutex);
-    return dropped;
-}
-
 static void pipeline_request_stop(pipeline_t *pipeline, int failed)
 {
     if (failed) {
@@ -260,8 +117,8 @@ static void pipeline_request_stop(pipeline_t *pipeline, int failed)
         pthread_mutex_unlock(&pipeline->state_mutex);
     }
     running = 0;
-    latest_frame_slot_close(&pipeline->captured_frames);
-    latest_frame_slot_close(&pipeline->annotated_frames);
+    latest_frame_slot_close(pipeline->captured_frames);
+    latest_frame_slot_close(pipeline->annotated_frames);
 }
 
 static int pipeline_failed(pipeline_t *pipeline)
@@ -340,51 +197,6 @@ static const plate_result_t *find_best_result(
     return best;
 }
 
-static void copy_plate_number(char destination[PLATE_TEXT_CAPACITY],
-                              const char *source)
-{
-    strncpy(destination, source, PLATE_TEXT_CAPACITY - 1U);
-    destination[PLATE_TEXT_CAPACITY - 1U] = '\0';
-}
-
-static int update_plate_confirmation(plate_confirmation_t *state,
-                                     const plate_result_t *result,
-                                     uint64_t now_us)
-{
-    if (result == NULL) {
-        if (state->missed_frames < MAX_MISSED_FRAMES)
-            ++state->missed_frames;
-        if (state->missed_frames >= MAX_MISSED_FRAMES) {
-            state->candidate_plate[0] = '\0';
-            state->consecutive_frames = 0;
-            state->candidate_confirmed = 0;
-        }
-        return 0;
-    }
-
-    state->missed_frames = 0;
-    if (strcmp(state->candidate_plate, result->plate_number) == 0) {
-        if (state->consecutive_frames < REQUIRED_CONFIRM_FRAMES)
-            ++state->consecutive_frames;
-    } else {
-        copy_plate_number(state->candidate_plate, result->plate_number);
-        state->consecutive_frames = 1;
-        state->candidate_confirmed = 0;
-    }
-
-    if (state->consecutive_frames < REQUIRED_CONFIRM_FRAMES ||
-        state->candidate_confirmed)
-        return 0;
-    if (strcmp(state->last_confirmed_plate, result->plate_number) == 0 &&
-        now_us - state->last_confirmed_us < SAME_PLATE_COOLDOWN_US)
-        return 0;
-
-    copy_plate_number(state->last_confirmed_plate, result->plate_number);
-    state->last_confirmed_us = now_us;
-    state->candidate_confirmed = 1;
-    return 1;
-}
-
 static void *capture_thread_main(void *argument)
 {
     pipeline_t *pipeline = argument;
@@ -418,26 +230,37 @@ static void *capture_thread_main(void *argument)
             break;
         }
 
-        push_result = latest_frame_slot_push(&pipeline->captured_frames,
+        push_result = latest_frame_slot_push(pipeline->captured_frames,
                                              &output);
-        if (push_result != 1) {
+        if (push_result != LATEST_FRAME_SLOT_OK) {
             pipeline_frame_release(&output);
-            if (push_result < 0)
+            if (push_result == LATEST_FRAME_SLOT_ERROR)
                 pipeline_request_stop(pipeline, 1);
             break;
         }
     }
 
-    latest_frame_slot_close(&pipeline->captured_frames);
+    latest_frame_slot_close(pipeline->captured_frames);
     return NULL;
 }
 
 static void *recognition_thread_main(void *argument)
 {
     pipeline_t *pipeline = argument;
+    plate_confirmation_config_t confirmation_config = {
+        .required_frames = REQUIRED_CONFIRM_FRAMES,
+        .max_missed_frames = MAX_MISSED_FRAMES,
+        .same_plate_cooldown_us = SAME_PLATE_COOLDOWN_US
+    };
     plate_confirmation_t confirmation;
 
-    memset(&confirmation, 0, sizeof(confirmation));
+    if (plate_confirmation_init(
+            &confirmation, &confirmation_config) != 0) {
+        LOG_ERROR("初始化车牌确认器失败");
+        pipeline_request_stop(pipeline, 1);
+        return NULL;
+    }
+
     while (running) {
         pipeline_frame_t frame;
         plate_result_t results[PLATE_MAX_RESULTS];
@@ -446,13 +269,16 @@ static void *recognition_thread_main(void *argument)
         uint64_t recognized_at_us;
         int take_result;
         int result_count;
+        int confirmation_result;
         int push_result;
 
         memset(&frame, 0, sizeof(frame));
-        take_result = latest_frame_slot_take(&pipeline->captured_frames,
-                                             &frame);
-        if (take_result != 1) {
-            if (take_result < 0)
+        take_result = latest_frame_slot_take(
+            pipeline->captured_frames, &frame, QUEUE_WAIT_MS);
+        if (take_result == LATEST_FRAME_SLOT_TIMEOUT)
+            continue;
+        if (take_result != LATEST_FRAME_SLOT_OK) {
+            if (take_result == LATEST_FRAME_SLOT_ERROR)
                 pipeline_request_stop(pipeline, 1);
             break;
         }
@@ -487,8 +313,15 @@ static void *recognition_thread_main(void *argument)
         recognized_at_us = monotonic_us();
         if (best_result != NULL)
             pipeline_mark_plate_seen(pipeline, recognized_at_us);
-        if (update_plate_confirmation(
-                &confirmation, best_result, recognized_at_us)) {
+        confirmation_result = plate_confirmation_update(
+            &confirmation, best_result, recognized_at_us);
+        if (confirmation_result < 0) {
+            LOG_ERROR("更新车牌确认器失败");
+            pipeline_frame_release(&frame);
+            pipeline_request_stop(pipeline, 1);
+            break;
+        }
+        if (confirmation_result == 1) {
             LOG_INFO("确认车牌=%s, 颜色=%s, 检测置信度=%.2f, "
                      "颜色置信度=%.2f",
                      best_result->plate_number, best_result->color_name,
@@ -510,17 +343,17 @@ static void *recognition_thread_main(void *argument)
             break;
         }
 
-        push_result = latest_frame_slot_push(&pipeline->annotated_frames,
+        push_result = latest_frame_slot_push(pipeline->annotated_frames,
                                              &frame);
-        if (push_result != 1) {
+        if (push_result != LATEST_FRAME_SLOT_OK) {
             pipeline_frame_release(&frame);
-            if (push_result < 0)
+            if (push_result == LATEST_FRAME_SLOT_ERROR)
                 pipeline_request_stop(pipeline, 1);
             break;
         }
     }
 
-    latest_frame_slot_close(&pipeline->annotated_frames);
+    latest_frame_slot_close(pipeline->annotated_frames);
     return NULL;
 }
 
@@ -697,9 +530,11 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
 
         memset(&frame, 0, sizeof(frame));
         take_result = latest_frame_slot_take(
-            &pipeline->annotated_frames, &frame);
-        if (take_result != 1) {
-            if (take_result < 0)
+            pipeline->annotated_frames, &frame, QUEUE_WAIT_MS);
+        if (take_result == LATEST_FRAME_SLOT_TIMEOUT)
+            continue;
+        if (take_result != LATEST_FRAME_SLOT_OK) {
+            if (take_result == LATEST_FRAME_SLOT_ERROR)
                 pipeline_request_stop(pipeline, 1);
             break;
         }
@@ -728,9 +563,9 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
 
         if (now_us - report_started_us >= 1000000ULL) {
             uint64_t capture_drops = latest_frame_slot_dropped(
-                &pipeline->captured_frames);
+                pipeline->captured_frames);
             uint64_t display_drops = latest_frame_slot_dropped(
-                &pipeline->annotated_frames);
+                pipeline->annotated_frames);
             double elapsed_seconds =
                 (double)(now_us - report_started_us) / 1000000.0;
 
@@ -782,8 +617,6 @@ int main(int argc, char **argv)
     pthread_t recognition_thread;
     int enable_gate = 0;
     int state_mutex_initialized = 0;
-    int captured_slot_initialized = 0;
-    int annotated_slot_initialized = 0;
     int camera_opened = 0;
     int camera_started = 0;
     int capture_thread_created = 0;
@@ -818,12 +651,12 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     state_mutex_initialized = 1;
-    if (latest_frame_slot_init(&pipeline.captured_frames) != 0)
+    pipeline.captured_frames = latest_frame_slot_create();
+    if (pipeline.captured_frames == NULL)
         goto cleanup;
-    captured_slot_initialized = 1;
-    if (latest_frame_slot_init(&pipeline.annotated_frames) != 0)
+    pipeline.annotated_frames = latest_frame_slot_create();
+    if (pipeline.annotated_frames == NULL)
         goto cleanup;
-    annotated_slot_initialized = 1;
 
     recognizer = plate_recognizer_create(
         DEFAULT_DETECT_MODEL, DEFAULT_RECOGNITION_MODEL,
@@ -890,7 +723,8 @@ int main(int argc, char **argv)
                                enable_gate) == 0 ? 0 : 1;
 
 cleanup:
-    if (captured_slot_initialized && annotated_slot_initialized)
+    if (pipeline.captured_frames != NULL ||
+        pipeline.annotated_frames != NULL)
         pipeline_request_stop(&pipeline, 0);
     else
         running = 0;
@@ -905,10 +739,8 @@ cleanup:
     display_destroy(display);
     plate_recognizer_destroy(recognizer);
     gate_destroy(gate);
-    if (annotated_slot_initialized)
-        latest_frame_slot_destroy(&pipeline.annotated_frames);
-    if (captured_slot_initialized)
-        latest_frame_slot_destroy(&pipeline.captured_frames);
+    latest_frame_slot_destroy(pipeline.annotated_frames);
+    latest_frame_slot_destroy(pipeline.captured_frames);
     if (state_mutex_initialized)
         pthread_mutex_destroy(&pipeline.state_mutex);
     return exit_code;
