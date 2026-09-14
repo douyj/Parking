@@ -1,11 +1,20 @@
-#include <stdio.h>
+#include "display.h"
+#include "log.h"
+#include "plate_pipeline.h"
 
-#include "camera.h"
+#include <errno.h>
+#include <linux/videodev2.h>
+#include <signal.h>
+#include <string.h>
+
+#define CAMERA_DEVICE           "/dev/video/0"
+#define FRAMEBUFFER_DEVICE      "/dev/fb0"
+
 
 
 
 int main(void)
 {
-    puts("Parking system started.");
+
     return 0;
 }

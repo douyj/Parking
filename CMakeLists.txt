@@ -35,7 +35,6 @@ add_library(parking_lib STATIC
     src/pipeline/pipeline_frame.c
     src/pipeline/latest_frame_slot.c
     src/pipeline/plate_confirmation.c
-    src/pipeline/plate_pipeline.c
 )
 
 target_include_directories(parking_lib
@@ -70,6 +69,23 @@ target_link_libraries(plate_recognizer_lib
     PUBLIC
         ${OpenCV_LIBS}
         rknnrt
+)
+
+# 多线程车牌识别管线
+add_library(plate_pipeline_lib STATIC
+    src/pipeline/plate_pipeline.c
+)
+
+target_include_directories(plate_pipeline_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(plate_pipeline_lib
+    PUBLIC
+        parking_lib
+        plate_recognizer_lib
+        Threads::Threads
 )
 
 # 主程序
@@ -130,9 +146,7 @@ add_executable(test_realtime_recognizer_threaded
 
 target_link_libraries(test_realtime_recognizer_threaded
     PRIVATE
-        parking_lib
-        plate_recognizer_lib
-        Threads::Threads
+        plate_pipeline_lib
 )
 
 set_target_properties(test_realtime_recognizer_threaded PROPERTIES
@@ -147,9 +161,7 @@ add_executable(test_realtime_plate_gate
 
 target_link_libraries(test_realtime_plate_gate
     PRIVATE
-        parking_lib
-        plate_recognizer_lib
-        Threads::Threads
+        plate_pipeline_lib
 )
 
 set_target_properties(test_realtime_plate_gate PROPERTIES
