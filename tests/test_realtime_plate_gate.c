@@ -1,21 +1,13 @@
-#include "camera.h"
 #include "display.h"
 #include "gate.h"
-#include "image_convert.h"
-#include "latest_frame_slot.h"
 #include "log.h"
-#include "plate_confirmation.h"
-#include "pipeline_frame.h"
-#include "plate_recognizer.h"
+#include "plate_pipeline.h"
 
 #include <errno.h>
-#include <limits.h>
 #include <linux/videodev2.h>
-#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -34,8 +26,10 @@
 #define MAX_MISSED_FRAMES 3U
 #define SAME_PLATE_COOLDOWN_US 10000000ULL
 #define GATE_AUTO_CLOSE_IDLE_US 10000000ULL
+#define CAMERA_TIMEOUT_MS 1000
 #define QUEUE_WAIT_MS 100
 #define GATE_INITIALIZE_TIMEOUT_MS 5000U
+#define ERROR_MESSAGE_CAPACITY 256
 
 #define GATE_PWMCHIP_PATH "/sys/class/pwm/pwmchip2"
 #define GATE_PWM_CHANNEL 0U
@@ -44,25 +38,6 @@
 #define GATE_CLOSE_PULSE_NS 1400000ULL
 #define GATE_MOVEMENT_TIME_MS 800U
 #define GATE_HOLD_AFTER_MOVE 0
-
-typedef struct {
-    char plate_number[PLATE_TEXT_CAPACITY];
-    char color_name[PLATE_COLOR_CAPACITY];
-    float detect_confidence;
-    float color_confidence;
-} plate_event_t;
-
-typedef struct {
-    Camera *camera;
-    plate_recognizer_t *recognizer;
-    latest_frame_slot_t *captured_frames;
-    latest_frame_slot_t *annotated_frames;
-    pthread_mutex_t state_mutex;
-    plate_event_t pending_event;
-    uint64_t last_plate_seen_us;
-    int has_pending_event;
-    int failed;
-} pipeline_t;
 
 static volatile sig_atomic_t running = 1;
 
@@ -109,252 +84,19 @@ static int install_signal_handlers(void)
     return 0;
 }
 
-static void pipeline_request_stop(pipeline_t *pipeline, int failed)
+static void log_pipeline_error(plate_pipeline_t *pipeline)
 {
-    if (failed) {
-        pthread_mutex_lock(&pipeline->state_mutex);
-        pipeline->failed = 1;
-        pthread_mutex_unlock(&pipeline->state_mutex);
+    char message[ERROR_MESSAGE_CAPACITY];
+
+    if (pipeline == NULL)
+        return;
+
+    memset(message, 0, sizeof(message));
+    if (plate_pipeline_copy_last_error(
+            pipeline, message, sizeof(message)) == PLATE_PIPELINE_OK &&
+        message[0] != '\0') {
+        LOG_ERROR("车牌管线错误: %s", message);
     }
-    running = 0;
-    latest_frame_slot_close(pipeline->captured_frames);
-    latest_frame_slot_close(pipeline->annotated_frames);
-}
-
-static int pipeline_failed(pipeline_t *pipeline)
-{
-    int failed;
-
-    pthread_mutex_lock(&pipeline->state_mutex);
-    failed = pipeline->failed;
-    pthread_mutex_unlock(&pipeline->state_mutex);
-    return failed;
-}
-
-static void pipeline_publish_plate_event(pipeline_t *pipeline,
-                                         const plate_result_t *result)
-{
-    pthread_mutex_lock(&pipeline->state_mutex);
-    strncpy(pipeline->pending_event.plate_number, result->plate_number,
-            PLATE_TEXT_CAPACITY - 1U);
-    pipeline->pending_event.plate_number[PLATE_TEXT_CAPACITY - 1U] = '\0';
-    strncpy(pipeline->pending_event.color_name, result->color_name,
-            PLATE_COLOR_CAPACITY - 1U);
-    pipeline->pending_event.color_name[PLATE_COLOR_CAPACITY - 1U] = '\0';
-    pipeline->pending_event.detect_confidence = result->detect_confidence;
-    pipeline->pending_event.color_confidence = result->color_confidence;
-    pipeline->has_pending_event = 1;
-    pthread_mutex_unlock(&pipeline->state_mutex);
-}
-
-static void pipeline_mark_plate_seen(pipeline_t *pipeline,
-                                     uint64_t seen_us)
-{
-    pthread_mutex_lock(&pipeline->state_mutex);
-    pipeline->last_plate_seen_us = seen_us;
-    pthread_mutex_unlock(&pipeline->state_mutex);
-}
-
-static uint64_t pipeline_last_plate_seen(pipeline_t *pipeline)
-{
-    uint64_t seen_us;
-
-    pthread_mutex_lock(&pipeline->state_mutex);
-    seen_us = pipeline->last_plate_seen_us;
-    pthread_mutex_unlock(&pipeline->state_mutex);
-    return seen_us;
-}
-
-static int pipeline_take_plate_event(pipeline_t *pipeline,
-                                     plate_event_t *event)
-{
-    int has_event;
-
-    pthread_mutex_lock(&pipeline->state_mutex);
-    has_event = pipeline->has_pending_event;
-    if (has_event) {
-        *event = pipeline->pending_event;
-        memset(&pipeline->pending_event, 0,
-               sizeof(pipeline->pending_event));
-        pipeline->has_pending_event = 0;
-    }
-    pthread_mutex_unlock(&pipeline->state_mutex);
-    return has_event;
-}
-
-static const plate_result_t *find_best_result(
-    const plate_result_t *results, int result_count)
-{
-    const plate_result_t *best = NULL;
-
-    for (int i = 0; i < result_count; ++i) {
-        if (results[i].plate_number[0] == '\0')
-            continue;
-        if (best == NULL ||
-            results[i].detect_confidence > best->detect_confidence)
-            best = &results[i];
-    }
-    return best;
-}
-
-static void *capture_thread_main(void *argument)
-{
-    pipeline_t *pipeline = argument;
-
-    while (running) {
-        CameraFrame camera_frame;
-        pipeline_frame_t output;
-        uint64_t convert_started_us;
-        int convert_result;
-        int release_result;
-        int push_result;
-
-        memset(&camera_frame, 0, sizeof(camera_frame));
-        memset(&output, 0, sizeof(output));
-        output.started_us = monotonic_us();
-
-        if (camera_get_frame(pipeline->camera, &camera_frame, 1000) != 0) {
-            if (!running)
-                break;
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        convert_started_us = monotonic_us();
-        convert_result = image_convert_to_bgr(&camera_frame, &output.image);
-        output.convert_us = monotonic_us() - convert_started_us;
-        release_result = camera_release_frame(pipeline->camera, &camera_frame);
-        if (convert_result != 0 || release_result != 0) {
-            pipeline_frame_release(&output);
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        push_result = latest_frame_slot_push(pipeline->captured_frames,
-                                             &output);
-        if (push_result != LATEST_FRAME_SLOT_OK) {
-            pipeline_frame_release(&output);
-            if (push_result == LATEST_FRAME_SLOT_ERROR)
-                pipeline_request_stop(pipeline, 1);
-            break;
-        }
-    }
-
-    latest_frame_slot_close(pipeline->captured_frames);
-    return NULL;
-}
-
-static void *recognition_thread_main(void *argument)
-{
-    pipeline_t *pipeline = argument;
-    plate_confirmation_config_t confirmation_config = {
-        .required_frames = REQUIRED_CONFIRM_FRAMES,
-        .max_missed_frames = MAX_MISSED_FRAMES,
-        .same_plate_cooldown_us = SAME_PLATE_COOLDOWN_US
-    };
-    plate_confirmation_t confirmation;
-
-    if (plate_confirmation_init(
-            &confirmation, &confirmation_config) != 0) {
-        LOG_ERROR("初始化车牌确认器失败");
-        pipeline_request_stop(pipeline, 1);
-        return NULL;
-    }
-
-    while (running) {
-        pipeline_frame_t frame;
-        plate_result_t results[PLATE_MAX_RESULTS];
-        const plate_result_t *best_result;
-        uint64_t recognize_started_us;
-        uint64_t recognized_at_us;
-        int take_result;
-        int result_count;
-        int confirmation_result;
-        int push_result;
-
-        memset(&frame, 0, sizeof(frame));
-        take_result = latest_frame_slot_take(
-            pipeline->captured_frames, &frame, QUEUE_WAIT_MS);
-        if (take_result == LATEST_FRAME_SLOT_TIMEOUT)
-            continue;
-        if (take_result != LATEST_FRAME_SLOT_OK) {
-            if (take_result == LATEST_FRAME_SLOT_ERROR)
-                pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        if (frame.image.width > INT_MAX ||
-            frame.image.height > INT_MAX ||
-            frame.image.stride > INT_MAX) {
-            LOG_ERROR("图像尺寸超出识别器支持范围");
-            pipeline_frame_release(&frame);
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        recognize_started_us = monotonic_us();
-        result_count = plate_recognizer_process(
-            pipeline->recognizer, frame.image.data,
-            (int)frame.image.width, (int)frame.image.height,
-            (int)frame.image.stride, DEFAULT_CONFIDENCE_THRESHOLD,
-            results, PLATE_MAX_RESULTS);
-        frame.recognize_us = monotonic_us() - recognize_started_us;
-        if (result_count < 0) {
-            const char *error =
-                plate_recognizer_last_error(pipeline->recognizer);
-            LOG_ERROR("车牌识别失败: %s",
-                      error != NULL ? error : "未知错误");
-            pipeline_frame_release(&frame);
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        best_result = find_best_result(results, result_count);
-        recognized_at_us = monotonic_us();
-        if (best_result != NULL)
-            pipeline_mark_plate_seen(pipeline, recognized_at_us);
-        confirmation_result = plate_confirmation_update(
-            &confirmation, best_result, recognized_at_us);
-        if (confirmation_result < 0) {
-            LOG_ERROR("更新车牌确认器失败");
-            pipeline_frame_release(&frame);
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-        if (confirmation_result == 1) {
-            LOG_INFO("确认车牌=%s, 颜色=%s, 检测置信度=%.2f, "
-                     "颜色置信度=%.2f",
-                     best_result->plate_number, best_result->color_name,
-                     best_result->detect_confidence,
-                     best_result->color_confidence);
-            pipeline_publish_plate_event(pipeline, best_result);
-        }
-
-        if (plate_recognizer_draw(
-                pipeline->recognizer, frame.image.data,
-                (int)frame.image.width, (int)frame.image.height,
-                (int)frame.image.stride, results, result_count) != 0) {
-            const char *error =
-                plate_recognizer_last_error(pipeline->recognizer);
-            LOG_ERROR("绘制识别结果失败: %s",
-                      error != NULL ? error : "未知错误");
-            pipeline_frame_release(&frame);
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
-
-        push_result = latest_frame_slot_push(pipeline->annotated_frames,
-                                             &frame);
-        if (push_result != LATEST_FRAME_SLOT_OK) {
-            pipeline_frame_release(&frame);
-            if (push_result == LATEST_FRAME_SLOT_ERROR)
-                pipeline_request_stop(pipeline, 1);
-            break;
-        }
-    }
-
-    latest_frame_slot_close(pipeline->annotated_frames);
-    return NULL;
 }
 
 static const char *gate_state_to_string(gate_state_t state)
@@ -435,52 +177,68 @@ static gate_t *create_real_gate(void)
         }
         sleep_ms(20U);
     }
+
     if (!running) {
         gate_destroy(gate);
         return NULL;
     }
+
     LOG_INFO("Gate 初始化完成，状态=%s",
              gate_state_to_string(gate_get_state(gate)));
     return gate;
 }
 
-static int handle_gate(pipeline_t *pipeline, gate_t *gate,
+static int handle_gate(plate_pipeline_t *pipeline, gate_t *gate,
                        int enable_gate, int *dry_gate_open)
 {
-    plate_event_t event;
+    plate_pipeline_event_t event;
     uint64_t last_seen_us;
     uint64_t now_us;
+    int event_result;
 
     if (enable_gate && gate_update(gate) != GATE_OK) {
         LOG_ERROR("更新 Gate 状态失败: %s", gate_last_error(gate));
         return -1;
     }
-    while (pipeline_take_plate_event(pipeline, &event)) {
+
+    for (;;) {
+        memset(&event, 0, sizeof(event));
+        event_result = plate_pipeline_take_event(pipeline, &event);
+        if (event_result == 0)
+            break;
+        if (event_result < 0) {
+            LOG_ERROR("读取稳定车牌事件失败");
+            return -1;
+        }
+
         if (!enable_gate) {
             LOG_INFO("[DRY-RUN] 稳定车牌 %s -> 模拟开闸",
-                     event.plate_number);
+                     event.result.plate_number);
             *dry_gate_open = 1;
             continue;
         }
 
         if (gate_get_state(gate) != GATE_STATE_CLOSED) {
             LOG_INFO("车牌 %s 请求开闸，但 Gate 状态=%s，忽略重复请求",
-                     event.plate_number,
+                     event.result.plate_number,
                      gate_state_to_string(gate_get_state(gate)));
             continue;
         }
+
         if (gate_open(gate) != GATE_OK) {
             LOG_ERROR("车牌 %s 请求开闸失败: %s",
-                      event.plate_number, gate_last_error(gate));
+                      event.result.plate_number, gate_last_error(gate));
             return -1;
         }
+
         LOG_INFO("车牌 %s 已触发真实开闸；连续 10 秒未识别到车牌将自动关闸",
-                 event.plate_number);
+                 event.result.plate_number);
     }
 
-    last_seen_us = pipeline_last_plate_seen(pipeline);
+    last_seen_us = plate_pipeline_last_plate_seen_us(pipeline);
     now_us = monotonic_us();
-    if (last_seen_us == 0 || now_us - last_seen_us < GATE_AUTO_CLOSE_IDLE_US)
+    if (last_seen_us == 0 ||
+        now_us - last_seen_us < GATE_AUTO_CLOSE_IDLE_US)
         return 0;
 
     if (!enable_gate) {
@@ -498,10 +256,11 @@ static int handle_gate(pipeline_t *pipeline, gate_t *gate,
         }
         LOG_INFO("连续 10 秒未识别到车牌，已触发自动关闸");
     }
+
     return 0;
 }
 
-static int display_frames(pipeline_t *pipeline, display_t *display,
+static int display_frames(plate_pipeline_t *pipeline, display_t *display,
                           gate_t *gate, int enable_gate)
 {
     uint64_t report_started_us = monotonic_us();
@@ -510,33 +269,33 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
     uint64_t total_display_us = 0;
     uint64_t total_latency_us = 0;
     uint64_t previous_capture_drops = 0;
-    uint64_t previous_display_drops = 0;
+    uint64_t previous_output_drops = 0;
     unsigned int displayed_frames = 0;
     int dry_gate_open = 0;
 
     while (running) {
         pipeline_frame_t frame;
         display_frame_t display_frame;
+        plate_pipeline_stats_t stats;
         uint64_t display_started_us;
         uint64_t display_us;
         uint64_t now_us;
         int take_result;
 
         if (handle_gate(pipeline, gate, enable_gate,
-                        &dry_gate_open) != 0) {
-            pipeline_request_stop(pipeline, 1);
-            break;
-        }
+                        &dry_gate_open) != 0)
+            return -1;
 
         memset(&frame, 0, sizeof(frame));
-        take_result = latest_frame_slot_take(
-            pipeline->annotated_frames, &frame, QUEUE_WAIT_MS);
-        if (take_result == LATEST_FRAME_SLOT_TIMEOUT)
+        take_result = plate_pipeline_take_frame(
+            pipeline, &frame, QUEUE_WAIT_MS);
+        if (take_result == PLATE_PIPELINE_TIMEOUT)
             continue;
-        if (take_result != LATEST_FRAME_SLOT_OK) {
-            if (take_result == LATEST_FRAME_SLOT_ERROR)
-                pipeline_request_stop(pipeline, 1);
+        if (take_result == PLATE_PIPELINE_CLOSED)
             break;
+        if (take_result != PLATE_PIPELINE_OK) {
+            LOG_ERROR("从车牌管线取得绘制帧失败");
+            return -1;
         }
 
         display_frame.data = frame.image.data;
@@ -548,8 +307,7 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
         display_started_us = monotonic_us();
         if (display_present(display, &display_frame) != 0) {
             pipeline_frame_release(&frame);
-            pipeline_request_stop(pipeline, 1);
-            break;
+            return -1;
         }
         display_us = monotonic_us() - display_started_us;
         now_us = monotonic_us();
@@ -562,29 +320,39 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
         pipeline_frame_release(&frame);
 
         if (now_us - report_started_us >= 1000000ULL) {
-            uint64_t capture_drops = latest_frame_slot_dropped(
-                pipeline->captured_frames);
-            uint64_t display_drops = latest_frame_slot_dropped(
-                pipeline->annotated_frames);
-            double elapsed_seconds =
+            double elapsed_seconds;
+
+            if (plate_pipeline_get_stats(pipeline, &stats) !=
+                PLATE_PIPELINE_OK) {
+                LOG_ERROR("读取车牌管线统计失败");
+                return -1;
+            }
+
+            elapsed_seconds =
                 (double)(now_us - report_started_us) / 1000000.0;
 
             LOG_INFO("FPS=%.1f, 转换=%.1f ms, 识别=%.1f ms, "
                      "显示=%.1f ms, 延迟=%.1f ms, "
                      "丢帧(采集/显示)=%llu/%llu",
                      displayed_frames / elapsed_seconds,
-                     (double)total_convert_us / displayed_frames / 1000.0,
-                     (double)total_recognize_us / displayed_frames / 1000.0,
-                     (double)total_display_us / displayed_frames / 1000.0,
-                     (double)total_latency_us / displayed_frames / 1000.0,
+                     (double)total_convert_us /
+                         displayed_frames / 1000.0,
+                     (double)total_recognize_us /
+                         displayed_frames / 1000.0,
+                     (double)total_display_us /
+                         displayed_frames / 1000.0,
+                     (double)total_latency_us /
+                         displayed_frames / 1000.0,
                      (unsigned long long)
-                         (capture_drops - previous_capture_drops),
+                         (stats.capture_dropped_frames -
+                          previous_capture_drops),
                      (unsigned long long)
-                         (display_drops - previous_display_drops));
+                         (stats.output_dropped_frames -
+                          previous_output_drops));
 
             report_started_us = now_us;
-            previous_capture_drops = capture_drops;
-            previous_display_drops = display_drops;
+            previous_capture_drops = stats.capture_dropped_frames;
+            previous_output_drops = stats.output_dropped_frames;
             total_convert_us = 0;
             total_recognize_us = 0;
             total_display_us = 0;
@@ -592,7 +360,8 @@ static int display_frames(pipeline_t *pipeline, display_t *display,
             displayed_frames = 0;
         }
     }
-    return pipeline_failed(pipeline) ? -1 : 0;
+
+    return plate_pipeline_failed(pipeline) ? -1 : 0;
 }
 
 static void print_usage(const char *program)
@@ -606,23 +375,13 @@ static void print_usage(const char *program)
 
 int main(int argc, char **argv)
 {
-    Camera camera;
-    CameraConfig camera_config;
+    plate_pipeline_config_t pipeline_config;
     display_config_t display_config;
+    plate_pipeline_t *pipeline = NULL;
     display_t *display = NULL;
-    plate_recognizer_t *recognizer = NULL;
     gate_t *gate = NULL;
-    pipeline_t pipeline;
-    pthread_t capture_thread;
-    pthread_t recognition_thread;
     int enable_gate = 0;
-    int state_mutex_initialized = 0;
-    int camera_opened = 0;
-    int camera_started = 0;
-    int capture_thread_created = 0;
-    int recognition_thread_created = 0;
     int exit_code = 1;
-    int error;
 
     if (argc == 2 && strcmp(argv[1], "--enable-gate") == 0) {
         enable_gate = 1;
@@ -636,59 +395,45 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    memset(&camera, 0, sizeof(camera));
-    memset(&pipeline, 0, sizeof(pipeline));
     if (install_signal_handlers() != 0)
         return 1;
+
     if (enable_gate && !confirm_real_gate()) {
         LOG_INFO("未确认启用真实 Gate，程序退出");
         return 1;
     }
 
-    error = pthread_mutex_init(&pipeline.state_mutex, NULL);
-    if (error != 0) {
-        LOG_ERROR("初始化管线状态锁失败: %s", strerror(error));
-        goto cleanup;
-    }
-    state_mutex_initialized = 1;
-    pipeline.captured_frames = latest_frame_slot_create();
-    if (pipeline.captured_frames == NULL)
-        goto cleanup;
-    pipeline.annotated_frames = latest_frame_slot_create();
-    if (pipeline.annotated_frames == NULL)
-        goto cleanup;
-
-    recognizer = plate_recognizer_create(
-        DEFAULT_DETECT_MODEL, DEFAULT_RECOGNITION_MODEL,
-        DEFAULT_FONT_PATH);
-    if (recognizer == NULL) {
-        LOG_ERROR("创建车牌识别器失败");
-        goto cleanup;
-    }
-
+    memset(&display_config, 0, sizeof(display_config));
     display_config.device = DEFAULT_FRAMEBUFFER_DEVICE;
     display_config.keep_aspect_ratio = 1;
     display = display_create(&display_config);
     if (display == NULL)
         goto cleanup;
 
-    camera_config.device = DEFAULT_CAMERA_DEVICE;
-    camera_config.width = DEFAULT_CAMERA_WIDTH;
-    camera_config.height = DEFAULT_CAMERA_HEIGHT;
-    camera_config.fps = DEFAULT_CAMERA_FPS;
-    camera_config.pixel_format = V4L2_PIX_FMT_MJPEG;
-    if (camera_open(&camera, &camera_config) != 0)
+    memset(&pipeline_config, 0, sizeof(pipeline_config));
+    pipeline_config.camera.device = DEFAULT_CAMERA_DEVICE;
+    pipeline_config.camera.width = DEFAULT_CAMERA_WIDTH;
+    pipeline_config.camera.height = DEFAULT_CAMERA_HEIGHT;
+    pipeline_config.camera.fps = DEFAULT_CAMERA_FPS;
+    pipeline_config.camera.pixel_format = V4L2_PIX_FMT_MJPEG;
+    pipeline_config.detect_model_path = DEFAULT_DETECT_MODEL;
+    pipeline_config.recognition_model_path =
+        DEFAULT_RECOGNITION_MODEL;
+    pipeline_config.font_path = DEFAULT_FONT_PATH;
+    pipeline_config.confidence_threshold =
+        DEFAULT_CONFIDENCE_THRESHOLD;
+    pipeline_config.confirmation.required_frames =
+        REQUIRED_CONFIRM_FRAMES;
+    pipeline_config.confirmation.max_missed_frames =
+        MAX_MISSED_FRAMES;
+    pipeline_config.confirmation.same_plate_cooldown_us =
+        SAME_PLATE_COOLDOWN_US;
+    pipeline_config.camera_timeout_ms = CAMERA_TIMEOUT_MS;
+    pipeline_config.frame_wait_ms = QUEUE_WAIT_MS;
+
+    pipeline = plate_pipeline_create(&pipeline_config);
+    if (pipeline == NULL)
         goto cleanup;
-    camera_opened = 1;
-    if (camera.pixel_format != V4L2_PIX_FMT_MJPEG &&
-        camera.pixel_format != V4L2_PIX_FMT_YUYV) {
-        LOG_ERROR("摄像头实际格式不受支持: 0x%08x",
-                  camera.pixel_format);
-        goto cleanup;
-    }
-    if (camera_start(&camera) != 0)
-        goto cleanup;
-    camera_started = 1;
 
     if (enable_gate) {
         gate = create_real_gate();
@@ -696,52 +441,28 @@ int main(int argc, char **argv)
             goto cleanup;
     }
 
-    pipeline.camera = &camera;
-    pipeline.recognizer = recognizer;
-    error = pthread_create(&recognition_thread, NULL,
-                           recognition_thread_main, &pipeline);
-    if (error != 0) {
-        LOG_ERROR("创建识别线程失败: %s", strerror(error));
+    if (plate_pipeline_start(pipeline) != PLATE_PIPELINE_OK) {
+        log_pipeline_error(pipeline);
         goto cleanup;
     }
-    recognition_thread_created = 1;
-    error = pthread_create(&capture_thread, NULL,
-                           capture_thread_main, &pipeline);
-    if (error != 0) {
-        LOG_ERROR("创建采集线程失败: %s", strerror(error));
-        pipeline_request_stop(&pipeline, 1);
-        goto cleanup;
-    }
-    capture_thread_created = 1;
 
-    LOG_INFO("开始车牌/Gate 联动测试: %ux%u@%u，模式=%s，"
+    LOG_INFO("开始车牌/Gate 联动测试: 请求参数=%ux%u@%u，模式=%s，"
              "按 Ctrl+C 退出",
-             camera.width, camera.height, camera.fps,
+             pipeline_config.camera.width,
+             pipeline_config.camera.height,
+             pipeline_config.camera.fps,
              enable_gate ? "真实 Gate（10 秒无车牌自动关闸）" :
                            "DRY-RUN");
-    exit_code = display_frames(&pipeline, display, gate,
+
+    exit_code = display_frames(pipeline, display, gate,
                                enable_gate) == 0 ? 0 : 1;
+    if (exit_code != 0 && plate_pipeline_failed(pipeline))
+        log_pipeline_error(pipeline);
 
 cleanup:
-    if (pipeline.captured_frames != NULL ||
-        pipeline.annotated_frames != NULL)
-        pipeline_request_stop(&pipeline, 0);
-    else
-        running = 0;
-    if (capture_thread_created)
-        pthread_join(capture_thread, NULL);
-    if (recognition_thread_created)
-        pthread_join(recognition_thread, NULL);
-    if (camera_started)
-        (void)camera_stop(&camera);
-    if (camera_opened)
-        camera_close(&camera);
+    plate_pipeline_stop(pipeline);
+    plate_pipeline_destroy(pipeline);
     display_destroy(display);
-    plate_recognizer_destroy(recognizer);
     gate_destroy(gate);
-    latest_frame_slot_destroy(pipeline.annotated_frames);
-    latest_frame_slot_destroy(pipeline.captured_frames);
-    if (state_mutex_initialized)
-        pthread_mutex_destroy(&pipeline.state_mutex);
     return exit_code;
 }

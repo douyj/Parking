@@ -35,6 +35,7 @@ add_library(parking_lib STATIC
     src/pipeline/pipeline_frame.c
     src/pipeline/latest_frame_slot.c
     src/pipeline/plate_confirmation.c
+    src/pipeline/plate_pipeline.c
 )
 
 target_include_directories(parking_lib
