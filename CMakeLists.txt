@@ -95,8 +95,7 @@ add_executable(parking
 
 target_link_libraries(parking
     PRIVATE
-        parking_lib
-        plate_recognizer_lib
+        plate_pipeline_lib
 )
 
 # 摄像头测试

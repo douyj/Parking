@@ -544,16 +544,17 @@ int plate_pipeline_take_frame(plate_pipeline_t *pipeline, pipeline_frame_t *fram
 
     result = latest_frame_slot_take(pipeline->annotated_frames, frame, timeout_ms);
     switch (result) {
-    case LATEST_FRAME_SLOT_OK:
-        return PLATE_PIPELINE_OK;
-    case LATEST_FRAME_SLOT_TIMEOUT:
-        return PLATE_PIPELINE_TIMEOUT;
-    case LATEST_FRAME_SLOT_CLOSED:
-        return PLATE_PIPELINE_CLOSED;
-    default:
-        return PLATE_PIPELINE_ERROR;
+        case LATEST_FRAME_SLOT_OK:
+            return PLATE_PIPELINE_OK;
+        case LATEST_FRAME_SLOT_TIMEOUT:
+            return PLATE_PIPELINE_TIMEOUT;
+        case LATEST_FRAME_SLOT_CLOSED:
+            return PLATE_PIPELINE_CLOSED;
+        default:
+            return PLATE_PIPELINE_ERROR;
     }
 }
+
 
 int plate_pipeline_take_event(plate_pipeline_t *pipeline, plate_pipeline_event_t *event)
 {
