@@ -49,6 +49,16 @@ target_link_libraries(parking_lib
         m
 )
 
+# 停车业务状态机（不直接依赖 Camera、Gate、SQLite 或网络）
+add_library(parking_business_lib STATIC
+    src/business/parking_controller.c
+)
+
+target_include_directories(parking_business_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
 # 车牌识别模块
 add_library(plate_recognizer_lib STATIC
     src/recognizer/rknn_model.cpp
@@ -99,6 +109,7 @@ add_executable(parking
 target_link_libraries(parking
     PRIVATE
         plate_pipeline_lib
+        parking_business_lib
 )
 
 # 摄像头测试
