@@ -3,6 +3,7 @@
 #include "image_convert.h"
 #include "latest_frame_slot.h"
 #include "log.h"
+#include "plate_event_queue.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -30,20 +31,19 @@ struct plate_pipeline{
 
     latest_frame_slot_t *captured_frames;   // 已捕获的帧
     latest_frame_slot_t *annotated_frames;  // 画框后的帧
+    plate_event_queue_t *event_queue;       // 稳定车牌事件 FIFO
 
     pthread_t capture_thread;       // 捕获线程
     pthread_t recognition_thread;   // 识别线程
 
     pthread_mutex_t state_mutex;    // 状态互斥锁
 
-    plate_pipeline_event_t pending_event;       // 待处理事件
     plate_pipeline_stats_t stats;               // 性能统计
 
     uint64_t last_plate_seen_us;              // 最后一次看到车牌的时间戳（微秒）
 
     char last_error[ERROR_MESSAGE_CAPACITY];     // 最后一次错误信息
 
-    int has_pending_event;                  // 是否有待处理事件
     int stop_requested;                     // 是否请求停止
     int failed;                             // 是否 failed
 
@@ -146,9 +146,10 @@ static void pipeline_request_stop(plate_pipeline_t *pipeline, int failed,
     }
     pthread_mutex_unlock(&pipeline->state_mutex);
 
-    /* 关闭帧槽会唤醒正在等待的工作线程。 */
+    /* 关闭内部通道，拒绝新的帧和事件。 */
     latest_frame_slot_close(pipeline->captured_frames);
     latest_frame_slot_close(pipeline->annotated_frames);
+    plate_event_queue_close(pipeline->event_queue);
 }
 
 static const plate_result_t *find_best_result(
@@ -194,16 +195,21 @@ static void pipeline_mark_plate_seen(plate_pipeline_t *pipeline,
     pthread_mutex_unlock(&pipeline->state_mutex);
 }
 
-static void pipeline_publish_plate_event(plate_pipeline_t *pipeline,
-                                         const plate_result_t *result,
-                                         uint64_t confirmed_at_us)
+static int pipeline_publish_plate_event(plate_pipeline_t *pipeline,
+                                        const plate_result_t *result,
+                                        uint64_t confirmed_at_us)
 {
+    plate_pipeline_event_t event;
+
+    memset(&event, 0, sizeof(event));
+    event.result = *result;
+    event.confirmed_at_us = confirmed_at_us;
+
     pthread_mutex_lock(&pipeline->state_mutex);
-    pipeline->pending_event.result = *result;
-    pipeline->pending_event.confirmed_at_us = confirmed_at_us;
-    pipeline->has_pending_event = 1;
     ++pipeline->stats.confirmed_events;
     pthread_mutex_unlock(&pipeline->state_mutex);
+
+    return plate_event_queue_push(pipeline->event_queue, &event);
 }
 
 static void *capture_thread_main(void *argument)
@@ -281,6 +287,7 @@ static void *recognition_thread_main(void *argument)
         int take_result;                        // 采集线程读取采集帧槽的结果
         int result_count;                       // 识别结果数量
         int confirmation_result;                // 确认结果
+        int event_result;                       // 稳定事件入队结果
         int push_result;                        // 输出线程写入输出帧槽的结果
 
         memset(&frame, 0, sizeof(frame));
@@ -338,7 +345,22 @@ static void *recognition_thread_main(void *argument)
         }
         
         if (confirmation_result == 1) {
-            pipeline_publish_plate_event(pipeline, best_result, recognized_at_us);
+            event_result = pipeline_publish_plate_event(
+                pipeline, best_result, recognized_at_us);
+            if (event_result != PLATE_EVENT_QUEUE_OK) {
+                pipeline_frame_release(&frame);
+
+                if (event_result == PLATE_EVENT_QUEUE_FULL) {
+                    LOG_ERROR("稳定车牌事件队列已满");
+                    pipeline_request_stop(
+                        pipeline, 1, "稳定车牌事件队列已满");
+                } else if (event_result != PLATE_EVENT_QUEUE_CLOSED) {
+                    LOG_ERROR("写入稳定车牌事件队列失败");
+                    pipeline_request_stop(
+                        pipeline, 1, "写入稳定车牌事件队列失败");
+                }
+                break;
+            }
         }
 
         if (plate_recognizer_draw(
@@ -412,6 +434,14 @@ plate_pipeline_t *plate_pipeline_create(const plate_pipeline_config_t *config)
     pipeline->config.detect_model_path = pipeline->detect_model_path;
     pipeline->config.recognition_model_path = pipeline->recognition_model_path;
     pipeline->config.font_path = pipeline->font_path;
+    if (pipeline->config.event_queue_capacity == 0) {
+        pipeline->config.event_queue_capacity =
+            PLATE_PIPELINE_DEFAULT_EVENT_QUEUE_CAPACITY;
+    }
+
+    pipeline->event_queue = plate_event_queue_create(pipeline->config.event_queue_capacity);
+    if (pipeline->event_queue == NULL)
+        goto fail;
 
     // 创建帧槽
     pipeline->captured_frames = latest_frame_slot_create();
@@ -558,21 +588,21 @@ int plate_pipeline_take_frame(plate_pipeline_t *pipeline, pipeline_frame_t *fram
 
 int plate_pipeline_take_event(plate_pipeline_t *pipeline, plate_pipeline_event_t *event)
 {
-    int has_event;
+    int result;
 
     if (pipeline == NULL || event == NULL)
         return PLATE_PIPELINE_ERROR;
 
-    pthread_mutex_lock(&pipeline->state_mutex);
-    has_event = pipeline->has_pending_event;
-    if (has_event) {
-        *event = pipeline->pending_event;
-        memset(&pipeline->pending_event, 0, sizeof(pipeline->pending_event));
-        pipeline->has_pending_event = 0;
+    result = plate_event_queue_take(pipeline->event_queue, event);
+    switch (result) {
+        case PLATE_EVENT_QUEUE_OK:
+            return 1;
+        case PLATE_EVENT_QUEUE_EMPTY:
+        case PLATE_EVENT_QUEUE_CLOSED:
+            return 0;
+        default:
+            return PLATE_PIPELINE_ERROR;
     }
-    pthread_mutex_unlock(&pipeline->state_mutex);
-
-    return has_event;
 }
 
 uint64_t plate_pipeline_last_plate_seen_us(plate_pipeline_t *pipeline)
@@ -592,6 +622,8 @@ uint64_t plate_pipeline_last_plate_seen_us(plate_pipeline_t *pipeline)
 int plate_pipeline_get_stats(plate_pipeline_t *pipeline,
                              plate_pipeline_stats_t *stats)
 {
+    plate_event_queue_stats_t event_stats;
+
     if (pipeline == NULL || stats == NULL)
         return PLATE_PIPELINE_ERROR;
 
@@ -603,6 +635,17 @@ int plate_pipeline_get_stats(plate_pipeline_t *pipeline,
         latest_frame_slot_dropped(pipeline->captured_frames);
     stats->output_dropped_frames =
         latest_frame_slot_dropped(pipeline->annotated_frames);
+
+    if (plate_event_queue_get_stats(pipeline->event_queue, &event_stats) !=
+        PLATE_EVENT_QUEUE_OK)
+        return PLATE_PIPELINE_ERROR;
+
+    stats->queued_events = event_stats.pushed_events;
+    stats->consumed_events = event_stats.popped_events;
+    stats->dropped_events = event_stats.dropped_events;
+    stats->event_queue_depth = event_stats.depth;
+    stats->event_queue_capacity = event_stats.capacity;
+    stats->event_queue_high_watermark = event_stats.high_watermark;
 
     return PLATE_PIPELINE_OK;
 }
@@ -648,6 +691,7 @@ void plate_pipeline_destroy(plate_pipeline_t *pipeline)
     plate_recognizer_destroy(pipeline->recognizer);
     latest_frame_slot_destroy(pipeline->annotated_frames);
     latest_frame_slot_destroy(pipeline->captured_frames);
+    plate_event_queue_destroy(pipeline->event_queue);
 
     if (pipeline->mutex_initialized)
         pthread_mutex_destroy(&pipeline->state_mutex);

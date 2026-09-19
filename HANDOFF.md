@@ -1,6 +1,6 @@
 # Parking 项目交接文档
 
-> 最后更新：2026-09-15（Asia/Shanghai）
+> 最后更新：2026-09-19（Asia/Shanghai）
 >
 > 新会话第一步：完整阅读本文，然后执行 `git status --short`。
 >
@@ -41,8 +41,11 @@ USB/V4L2 摄像头
 8. `src/main.c` 已接入 Display 和 `plate_pipeline`，不再是占位程序；
 9. `parking` 主程序已交叉编译为 ARM aarch64，并在 RK3576 板端运行成功；
 10. 正式主程序已确认能够显示实时识别画面并输出稳定车牌事件。
+11. 稳定车牌事件已从单个 `pending_event` 升级为容量可配置的有界 FIFO；
+12. FIFO 默认容量为 32，满队列时拒绝新事件、累计丢弃统计并让管线失败停止；
+13. FIFO 版本已通过严格告警检查、RK3576 交叉编译和板端正常运行回归。
 
-当前没有已知编译或运行卡点。下一阶段应先把单个 `pending_event` 升级为有界 FIFO，并明确溢出策略，然后设计入场/出场业务状态机和 SQLite；不要继续重写已经通过真机验证的 Camera、Recognizer、Gate 和管线线程逻辑。
+当前没有已知编译或运行卡点。下一阶段应设计入场/出场业务状态机、识别结果去重与异常处理，然后再接入 SQLite；不要继续重写已经通过真机验证的 Camera、Recognizer、Gate 和管线线程逻辑。
 
 ## 2. 当前结论速览
 
@@ -66,10 +69,12 @@ plate_confirmation                           已抽取并真机验证
 src/main.c 正式管线与 Display 集成            已完成并在 RK3576 板端验证
 parking 稳定车牌事件日志                      已在 RK3576 板端验证
 parking 正式 Gate 集成                        尚未开始
-稳定事件有界 FIFO                             尚未实现
+稳定事件有界 FIFO                             已实现、交叉编译并完成板端正常路径验证
 LVGL / 原生 DRM/KMS                          尚未接入
 停车业务、SQLite、MQTT、计费、支付、OTA       尚未实现
 ```
+
+有界 FIFO 的正常运行路径已经随正式 `parking` 主程序在板端回归成功，但没有专门制造 32 个事件积压，因此满队列溢出、丢弃统计和失败停止路径尚未真机验证。用户明确不需要为本次 FIFO 新增独立单元测试；不能把未执行的溢出测试写成已经通过。
 
 用户没有提供本次正式 `parking` 主程序的具体 FPS、转换耗时、识别耗时、显示耗时、端到端延迟、丢帧数或芯片温度日志。不得编造这些数据；如需做性能对比，应请用户提供板端输出。
 
@@ -85,10 +90,12 @@ Gate 仍无物理限位、地感、防砸或车辆通过信号。当前自动关
 
 ```text
 include/plate_pipeline.h
+src/pipeline/plate_event_queue.h
+src/pipeline/plate_event_queue.c
 src/pipeline/plate_pipeline.c
 ```
 
-这两个文件已经被 Git 跟踪，属于已经完成并真机验证的正式模块。
+`plate_event_queue` 是 `plate_pipeline` 的私有实现模块，不属于业务层公开接口。当前 FIFO 相关文件和管线修改尚未提交；它们属于用户资产，不得删除或恢复。
 
 ### 3.2 责任边界
 
@@ -102,7 +109,7 @@ Camera 创建/打开/启动/停止/关闭
     -> RKNN 识别线程
     -> 最佳结果选择
     -> plate_confirmation 多帧确认
-    -> 稳定车牌事件 + last_plate_seen_us
+    -> 稳定车牌事件有界 FIFO + last_plate_seen_us
     -> 绘制识别框
     -> annotated_frames（容量 1 的最新帧槽）
 ```
@@ -144,16 +151,16 @@ int plate_pipeline_copy_last_error(plate_pipeline_t *pipeline,
 void plate_pipeline_destroy(plate_pipeline_t *pipeline);
 ```
 
-配置包括 Camera 参数、两个模型路径、字体路径、置信度阈值、确认帧数、漏检阈值、冷却时间、Camera 超时和内部帧等待时间。实现会把路径深拷贝到内部 `PATH_MAX` 数组，不依赖调用者临时字符串。
+配置包括 Camera 参数、两个模型路径、字体路径、置信度阈值、确认帧数、漏检阈值、冷却时间、Camera 超时、内部帧等待时间和稳定事件队列容量。`event_queue_capacity == 0` 时使用默认容量 32。实现会把路径深拷贝到内部 `PATH_MAX` 数组，不依赖调用者临时字符串。
 
 ### 3.4 生命周期和线程边界
 
-- `plate_pipeline_create()` 创建帧槽、确认器和 Recognizer，并打开 Camera，但不启动流和线程；
+- `plate_pipeline_create()` 创建事件 FIFO、帧槽、确认器和 Recognizer，并打开 Camera，但不启动流和线程；
 - `plate_pipeline_start()` 启动 Camera，先创建识别线程，再创建采集线程；
 - Camera 只由采集线程调用；
 - Recognizer 和确认器只由识别线程调用；
-- `plate_pipeline_stop()` 设置停止标志、关闭帧槽、join 两个线程，再停止 Camera；
-- `plate_pipeline_destroy()` 可重复调用 stop，然后关闭 Camera、销毁 Recognizer/帧槽/mutex 并释放对象；
+- `plate_pipeline_stop()` 设置停止标志、关闭帧槽和事件 FIFO、join 两个线程，再停止 Camera；
+- `plate_pipeline_destroy()` 可重复调用 stop，然后关闭 Camera、销毁 Recognizer、帧槽、事件 FIFO 和 mutex 并释放对象；
 - 当前对象是一次性启动语义：调用 stop 后帧槽已永久关闭，不能再次 start；需要重启时应 destroy 后重新 create；
 - 测试程序的信号处理函数只设置 `volatile sig_atomic_t running = 0`，实际 stop/destroy 在普通主线程执行。
 
@@ -176,7 +183,9 @@ pipeline_frame_release(&frame);
 
 `display_frame.data` 只是指向 `frame.image.data` 的别名，没有复制图像；不能在 `display_present()` 前释放帧。
 
-`plate_pipeline_take_event()` 当前是非阻塞接口，返回 `1/0/-1` 表示有事件、无事件、错误。当前实现只有一个 `pending_event`，新事件可能覆盖尚未消费的旧事件。现阶段主循环每 100 ms 消费且确认事件频率低，真机验证已通过；正式停车记录不能默默丢事件，接入 SQLite/多车业务前应升级为有界 FIFO 事件队列，并明确满队列策略。
+`plate_pipeline_take_event()` 是非阻塞接口，返回 `1/0/-1` 表示有事件、无事件、错误。稳定事件现在进入独立的线程安全环形 FIFO，默认容量为 32，也可通过 `event_queue_capacity` 配置。事件按先进先出顺序读取，不再被后续事件静默覆盖。
+
+队列满时不覆盖最旧事件，也不阻塞识别线程；当前新事件会被拒绝，`dropped_events` 增加，管线记录“稳定车牌事件队列已满”并进入失败停止。队列关闭后拒绝新事件，但已经入队的事件仍可继续取完。正式停车记录仍需要 SQLite 事务和幂等业务层，内存 FIFO 不提供断电持久化。
 
 `last_plate_seen_us` 在每一帧出现任意有效最佳车牌时刷新，不受稳定确认和同车牌冷却限制，因此同一车牌持续在画面中会持续延后自动关闸。
 
@@ -188,10 +197,16 @@ pipeline_frame_release(&frame);
 captured_frames
 recognized_frames
 confirmed_events
+queued_events
+consumed_events
+dropped_events
 total_convert_us
 total_recognize_us
 capture_dropped_frames
 output_dropped_frames
+event_queue_depth
+event_queue_capacity
+event_queue_high_watermark
 ```
 
 两个测试继续在主线程统计显示耗时和端到端延迟。错误字符串通过 `plate_pipeline_copy_last_error()` 复制到调用者缓冲区，避免把跨线程更新的内部字符串裸指针暴露给外部。
@@ -464,18 +479,20 @@ cmake --build build-rk3576-release \
   -j"$(nproc)"
 ```
 
-截至 2026-09-15 已完成：
+截至 2026-09-19 已完成：
 
 - `plate_pipeline.c` RK3576 交叉编译；
 - `plate_pipeline.c` 从 `parking_lib` 拆入独立的 `plate_pipeline_lib`；
 - 两个迁移后的测试交叉编译并链接；
 - 第一版正式 `parking` 主程序交叉编译并链接；
+- `plate_event_queue.c` 已加入 `plate_pipeline_lib`，单个事件槽已替换为有界 FIFO；
 - 产物确认为 ARM aarch64；
-- `plate_pipeline.c` 和两个测试额外使用 `-Wall -Wextra -Wpedantic -Werror` 编译通过；
+- `plate_event_queue.c` 和 `plate_pipeline.c` 额外使用 `-Wall -Wextra -Wpedantic -Werror` 编译通过；
 - `git diff --check` 通过；
 - 用户完成板端多线程识别回归；
 - 用户完成迁移后真实 Gate 回归；
-- 用户完成第一版正式 `parking` 主程序板端回归，确认屏幕显示和稳定车牌日志成功。
+- 用户完成第一版正式 `parking` 主程序板端回归，确认屏幕显示和稳定车牌日志成功；
+- 用户确认包含稳定事件 FIFO 的正式 `parking` 版本在 RK3576 板端测试成功。此次确认属于正常运行回归，没有提供专门的满队列溢出日志或新增性能数字。
 
 运行正式主程序时板端需要：
 
@@ -502,7 +519,7 @@ test_realtime_plate_gate
 
 ```text
 branch: feature/integration
-HEAD:   845b5f2 “1”
+HEAD:   fca364b “整合模块”
 ```
 
 写入本文后预期工作树：
@@ -510,15 +527,18 @@ HEAD:   845b5f2 “1”
 ```text
  M CMakeLists.txt
  M HANDOFF.md
- M src/main.c
+ M include/plate_pipeline.h
  M src/pipeline/plate_pipeline.c
+?? src/pipeline/plate_event_queue.c
+?? src/pipeline/plate_event_queue.h
 ```
 
 具体含义：
 
-- `CMakeLists.txt`：`parking` 主程序改为只链接 `plate_pipeline_lib`；
-- `src/main.c`：从占位程序升级为 Display + `plate_pipeline` 的第一版正式主程序，并已修正导致显示代码不可达的两个条件判断错误；
-- `src/pipeline/plate_pipeline.c`：用户对 `plate_pipeline_take_frame()` 的 `switch` 缩进和空行做了格式调整，没有行为变化；
+- `CMakeLists.txt`：把 `plate_event_queue.c` 加入 `plate_pipeline_lib`，并把 `src/pipeline` 作为该目标的私有 include 目录；
+- `include/plate_pipeline.h`：增加默认队列容量、`event_queue_capacity` 配置和事件队列统计字段；
+- `src/pipeline/plate_event_queue.h/.c`：新增私有、线程安全的有界环形 FIFO；
+- `src/pipeline/plate_pipeline.c`：用 FIFO 替换单个 `pending_event`，接入创建、发布、读取、关闭、统计和销毁流程，并在队列满时让管线明确失败停止；
 - `HANDOFF.md`：本交接更新。
 
 以上全部是用户资产。不要 reset、checkout、clean、恢复旧版或删除未跟踪文件。不要擅自提交；如需 commit，应先让用户确认提交范围和提交信息。
@@ -537,14 +557,18 @@ rm -rf build-rk3576-release
 
 ```bash
 git status --short
-git diff -- CMakeLists.txt HANDOFF.md src/main.c \
+git diff -- CMakeLists.txt HANDOFF.md include/plate_pipeline.h \
   src/pipeline/plate_pipeline.c
 ```
+
+注意：普通 `git diff` 不显示未跟踪的 `src/pipeline/plate_event_queue.h/.c`，必须直接阅读，不能误判为不存在或无修改。
 
 并直接阅读当前正式接口、主程序和相关构建配置：
 
 ```bash
 sed -n '1,260p' include/plate_pipeline.h
+sed -n '1,260p' src/pipeline/plate_event_queue.h
+sed -n '1,320p' src/pipeline/plate_event_queue.c
 sed -n '1,760p' src/pipeline/plate_pipeline.c
 sed -n '1,260p' src/main.c
 sed -n '1,260p' CMakeLists.txt
@@ -554,36 +578,36 @@ sed -n '1,260p' CMakeLists.txt
 
 当前没有已知编译卡点或正在诊断的崩溃。真正未完成的是：
 
-1. `plate_pipeline` 的稳定事件只有单个 pending slot，正式业务可能覆盖未消费事件；
-2. 尚未定义稳定事件 FIFO 的容量、满队列策略和溢出统计；
-3. 尚未定义识别字符串波动时的业务去重、置信度策略和异常处理；
-4. 尚未实现入场/出场业务状态机，因此不能把每个稳定识别事件直接写成停车记录；
-5. 尚未实现 SQLite schema、事务、停车记录和车位管理；
-6. 正式 `parking` 主程序尚未接入 Gate；真实 Gate 仍只在受控测试中使用；
-7. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
-8. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
-9. 管线对象 stop 后不能再次 start；
-10. 管线尚未提供查询 Camera 实际协商宽高/FPS/格式的接口；
-11. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
-12. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
-13. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
-14. 尚未实现 LVGL、MQTT、计费、支付和 OTA。
+1. 尚未专门验证稳定事件 FIFO 的满队列溢出、丢弃统计和失败停止路径；用户不要求为本次 FIFO 新增独立单元测试；
+2. 尚未定义识别字符串波动时的业务去重、置信度策略和异常处理；
+3. 尚未实现入场/出场业务状态机，因此不能把每个稳定识别事件直接写成停车记录；
+4. 尚未实现 SQLite schema、事务、停车记录和车位管理；
+5. 正式 `parking` 主程序尚未接入 Gate；真实 Gate 仍只在受控测试中使用；
+6. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
+7. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
+8. 管线对象 stop 后不能再次 start；
+9. 管线尚未提供查询 Camera 实际协商宽高/FPS/格式的接口；
+10. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
+11. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
+12. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
+13. 尚未实现 LVGL、MQTT、计费、支付和 OTA。
 
 ## 9. 下一步计划
 
-### 9.1 先升级稳定事件传递
+### 9.1 稳定事件传递已升级
 
-在接入数据库前，把当前单个 `pending_event` 升级为有界 FIFO，并明确：
+稳定事件已经从单个 `pending_event` 升级为私有的有界环形 FIFO：
 
 ```text
-队列容量
-    -> push/pop 线程安全
-    -> 满队列时丢最旧、丢最新或让管线失败
-    -> dropped_events 溢出统计
-    -> stop 时唤醒和关闭语义
+默认容量 32，可通过 event_queue_capacity 配置
+    -> push/take 由独立 mutex 保护
+    -> 按 FIFO 顺序消费
+    -> 满队列拒绝当前新事件并累计 dropped_events
+    -> 满队列让 plate_pipeline 失败停止，不静默继续运行
+    -> stop 时关闭队列，拒绝新事件，已有事件仍可取完
 ```
 
-图像帧仍保持容量为 1 的最新帧槽，不要把图像队列改成 FIFO 或无界队列。只有低频、不可默默丢失的稳定车牌事件需要独立 FIFO。
+图像帧仍保持容量为 1 的最新帧槽，不要把图像队列改成 FIFO 或无界队列。内存 FIFO 只解决短时消费积压，不等于 SQLite 持久化或断电恢复。正常板端路径已验证，专门的满队列路径尚未验证。
 
 ### 9.2 定义停车业务状态机
 
@@ -619,8 +643,7 @@ parking_spaces
 建议顺序：
 
 ```text
-稳定事件 FIFO
-    -> 入场/出场状态机与去重策略
+入场/出场状态机与去重策略
     -> SQLite 停车记录和车位
     -> 安全接入正式主程序 Gate
     -> LVGL UI
@@ -671,10 +694,10 @@ camera_get_frame
 
 ```text
 设置停止标志
-    -> 关闭帧槽并唤醒线程
+    -> 关闭帧槽和事件 FIFO，并唤醒等待帧的线程
     -> join 采集线程和识别线程
     -> camera_stop/camera_close
-    -> destroy recognizer/slots/mutex
+    -> destroy recognizer/slots/event queue/mutex
 ```
 
 `plate_pipeline` 已封装这个顺序。外部不要绕过它直接销毁内部资源。信号处理函数只改 `sig_atomic_t`，不要在信号上下文中调用 pthread、日志、Camera、RKNN、Gate 或内存释放函数。
@@ -683,9 +706,9 @@ camera_get_frame
 
 当前 `plate_pipeline_start()` 只能成功一次。`stop()` 会永久关闭帧槽。需要重启时 destroy 后重新 create；不要在同一对象上 stop 后再次 start。
 
-### 10.7 不要忽略稳定事件可能被覆盖
+### 10.7 不要破坏稳定事件 FIFO 的失败语义
 
-当前只有一个 `pending_event`。测试循环消费足够快，因此真机已成功，但这不等于正式停车记录绝不会丢事件。接入数据库前必须设计有界 FIFO、溢出统计和明确的满队列处理策略。
+当前稳定事件使用默认容量 32 的有界 FIFO，不再由新事件覆盖旧事件。满队列时拒绝当前新事件、累计 `dropped_events` 并让管线失败停止。不要改回单个 `pending_event`，不要改成无界队列，也不要在未定义业务恢复策略的情况下改为静默丢最旧或丢最新。FIFO 不是持久化存储，接入数据库后仍需事务、幂等更新和崩溃恢复。
 
 ### 10.8 不要误判显示技术
 
@@ -733,7 +756,7 @@ polarity=inversed
 
 ### 10.15 不要把规划或旧数据写成当前事实
 
-正式 `plate_pipeline`、独立 `plate_pipeline_lib`、两个迁移后的测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试以及正式主程序的屏幕显示和稳定车牌日志在板端成功。可以陈述这些事实，但不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。正式主程序 Gate、入/出场业务、SQLite、LVGL、MQTT、计费、支付、OTA 仍未实现。
+正式 `plate_pipeline`、独立 `plate_pipeline_lib`、稳定事件有界 FIFO、两个迁移后的测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试、正式主程序的屏幕显示和稳定车牌日志，以及包含 FIFO 的正式主程序正常路径在板端成功。可以陈述这些事实，但不能把 FIFO 满队列路径写成已验证，也不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。正式主程序 Gate、入/出场业务、SQLite、LVGL、MQTT、计费、支付、OTA 仍未实现。
 
 ### 10.16 不要擅自给 RKNN 限速
 
@@ -768,12 +791,12 @@ if (result == PLATE_PIPELINE_CLOSED)
 
 1. 完整阅读本文；
 2. 执行 `git status --short`，不清理任何修改；
-3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_pipeline.c`、`src/main.c` 和 `CMakeLists.txt`；
+3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`src/main.c` 和 `CMakeLists.txt`；
 4. 阅读两个迁移后的测试，理解 Display 和 Gate 仍属于主线程/业务层；
-5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试以及第一版正式 `parking` 主程序的显示和稳定事件日志都已经板端成功；
+5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序，以及 FIFO 版本的正常运行路径都已经板端成功；满队列溢出路径尚未专门验证；
 6. 不要把 `src/main.c` 恢复成占位程序，也不要重新复制 Camera、Recognizer 或管线线程逻辑；
 7. 不要重新从摄像头、MIPI、RKNN 或 PWM 是否存在开始排查，除非硬件环境发生变化；
-8. 默认下一步是先设计并实现稳定事件有界 FIFO，再定义停车业务状态机和 SQLite；
+8. 默认下一步是定义入场/出场业务状态机、车牌去重和异常识别策略，然后再设计 SQLite；
 9. 修改前说明文件范围；
 10. 不运行真实 Gate 自动测试，不把真实 Gate 默认接入主程序；
 11. 不擅自处理 RKNN 发热或改变推理频率；

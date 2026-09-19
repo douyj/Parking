@@ -13,6 +13,8 @@
 extern "C" {
 #endif
 
+#define PLATE_PIPELINE_DEFAULT_EVENT_QUEUE_CAPACITY 32U
+
 typedef struct plate_pipeline plate_pipeline_t;
 
 typedef enum {
@@ -35,6 +37,7 @@ typedef struct {
 
     int camera_timeout_ms;                // 相机超时时间（毫秒）
     int frame_wait_ms;                    // pipeline 内部识别线程等待“最新帧”的时间
+    size_t event_queue_capacity;          // 稳定事件队列容量，0 表示使用默认值
 } plate_pipeline_config_t;
 
 // 已经经过多帧确认后的稳定车牌事件
@@ -48,12 +51,19 @@ typedef struct {
     uint64_t captured_frames;            // 已捕获的帧数
     uint64_t recognized_frames;          // 已识别的帧数
     uint64_t confirmed_events;           // 已确认的事件数
+    uint64_t queued_events;              // 成功进入稳定事件队列的事件数
+    uint64_t consumed_events;            // 已被业务层取出的稳定事件数
+    uint64_t dropped_events;             // 因队列满而拒绝的稳定事件数
 
     uint64_t total_convert_us;           // 总转换时间（微秒）
     uint64_t total_recognize_us;         // 总识别时间（微秒）
 
     uint64_t capture_dropped_frames;     // 已丢弃的捕获帧数    
     uint64_t output_dropped_frames;      // 已丢弃的输出帧数
+
+    size_t event_queue_depth;            // 当前积压的稳定事件数
+    size_t event_queue_capacity;         // 稳定事件队列实际容量
+    size_t event_queue_high_watermark;   // 稳定事件历史最大积压数
 } plate_pipeline_stats_t;
 
 plate_pipeline_t *plate_pipeline_create(const plate_pipeline_config_t *config);

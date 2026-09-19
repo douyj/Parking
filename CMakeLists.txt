@@ -73,12 +73,15 @@ target_link_libraries(plate_recognizer_lib
 
 # 多线程车牌识别管线
 add_library(plate_pipeline_lib STATIC
+    src/pipeline/plate_event_queue.c
     src/pipeline/plate_pipeline.c
 )
 
 target_include_directories(plate_pipeline_lib
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/pipeline"
 )
 
 target_link_libraries(plate_pipeline_lib
