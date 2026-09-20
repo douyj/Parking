@@ -52,11 +52,28 @@ target_link_libraries(parking_lib
 # 停车业务状态机（不直接依赖 Camera、Gate、SQLite 或网络）
 add_library(parking_business_lib STATIC
     src/business/parking_controller.c
+    src/business/parking_plate_policy.c
 )
 
 target_include_directories(parking_business_lib
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+# SQLite 停车记录与车位存储层。实现运行时加载 libsqlite3，避免
+# RK3576 工具链 sysroot 缺少 SQLite 开发包时阻塞交叉编译。
+add_library(parking_storage_lib STATIC
+    src/storage/parking_store.c
+)
+
+target_include_directories(parking_storage_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(parking_storage_lib
+    PUBLIC
+        ${CMAKE_DL_LIBS}
 )
 
 # 车牌识别模块
@@ -110,6 +127,27 @@ target_link_libraries(parking
     PRIVATE
         plate_pipeline_lib
         parking_business_lib
+        parking_storage_lib
+)
+
+# 纯 C 车牌业务入口策略测试（不访问摄像头、NPU、Display 或 Gate）
+add_executable(test_parking_plate_policy
+    tests/test_parking_plate_policy.c
+)
+
+target_link_libraries(test_parking_plate_policy
+    PRIVATE
+        parking_business_lib
+)
+
+# 纯 C SQLite 停车存储测试（使用临时数据库，不访问硬件）
+add_executable(test_parking_store
+    tests/test_parking_store.c
+)
+
+target_link_libraries(test_parking_store
+    PRIVATE
+        parking_storage_lib
 )
 
 # 摄像头测试

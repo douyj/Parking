@@ -1,4 +1,5 @@
 #include "parking_controller.h"
+#include "parking_plate_policy.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -72,12 +73,6 @@ static void enter_state(parking_controller_t *controller,
 {
     controller->state = state;
     controller->state_started_us = now_us;
-}
-
-static int plate_string_valid(const char plate[PARKING_PLATE_CAPACITY])
-{
-    return plate != NULL && plate[0] != '\0' &&
-           memchr(plate, '\0', PARKING_PLATE_CAPACITY) != NULL;
 }
 
 static void copy_plate(char destination[PARKING_PLATE_CAPACITY],
@@ -202,8 +197,21 @@ static int handle_plate_event(parking_controller_t *controller,
                               parking_command_list_t *commands)
 {
     parking_command_type_t command_type;
+    parking_plate_policy_result_t policy_result;
 
-    if (!plate_string_valid(event->data.plate.plate_number)) {
+    if (memchr(event->data.plate.plate_number, '\0',
+               PARKING_PLATE_CAPACITY) == NULL ||
+        parking_plate_policy_evaluate(
+            event->data.plate.plate_number,
+            event->data.plate.confidence,
+            controller->plate_number,
+            controller->state == PARKING_STATE_IDLE,
+            &policy_result) != 0) {
+        memset(&policy_result, 0, sizeof(policy_result));
+        policy_result.decision = PARKING_PLATE_REJECT_INVALID;
+    }
+
+    if (policy_result.decision == PARKING_PLATE_REJECT_INVALID) {
         if (controller->state == PARKING_STATE_IDLE) {
             enter_state(controller, PARKING_STATE_REJECT_COOLDOWN,
                         event->occurred_at_us);
@@ -212,12 +220,16 @@ static int handle_plate_event(parking_controller_t *controller,
                               PARKING_REASON_INVALID_PLATE);
     }
 
-    if (controller->state != PARKING_STATE_IDLE) {
-        if (controller->plate_number[0] != '\0' &&
-            strcmp(controller->plate_number,
-                   event->data.plate.plate_number) == 0)
-            return 0;
+    if (policy_result.decision == PARKING_PLATE_IGNORE_DUPLICATE)
+        return 0;
 
+    if (policy_result.decision == PARKING_PLATE_REJECT_AMBIGUOUS) {
+        return emit_rejection(controller, commands,
+                              event->data.plate.plate_number,
+                              PARKING_REASON_AMBIGUOUS_PLATE);
+    }
+
+    if (controller->state != PARKING_STATE_IDLE) {
         return emit_rejection(controller, commands,
                               event->data.plate.plate_number,
                               controller->state == PARKING_STATE_ERROR ||
@@ -699,6 +711,8 @@ const char *parking_controller_reason_name(parking_reason_t reason)
             return "NONE";
         case PARKING_REASON_INVALID_PLATE:
             return "INVALID_PLATE";
+        case PARKING_REASON_AMBIGUOUS_PLATE:
+            return "AMBIGUOUS_PLATE";
         case PARKING_REASON_LANE_BUSY:
             return "LANE_BUSY";
         case PARKING_REASON_LANE_UNAVAILABLE:
@@ -729,6 +743,23 @@ const char *parking_controller_reason_name(parking_reason_t reason)
             return "UNEXPECTED_EVENT";
         case PARKING_REASON_INTERNAL_ERROR:
             return "INTERNAL_ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+const char *parking_controller_passage_source_name(
+    parking_passage_source_t source)
+{
+    switch (source) {
+        case PARKING_PASSAGE_NONE:
+            return "NONE";
+        case PARKING_PASSAGE_SENSOR:
+            return "SENSOR";
+        case PARKING_PASSAGE_MANUAL:
+            return "MANUAL";
+        case PARKING_PASSAGE_VISION_TIMEOUT:
+            return "VISION_TIMEOUT";
         default:
             return "UNKNOWN";
     }

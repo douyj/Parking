@@ -45,9 +45,14 @@ USB/V4L2 摄像头
 12. FIFO 默认容量为 32，满队列时拒绝新事件、累计丢弃统计并让管线失败停止；
 13. FIFO 版本已通过严格告警检查、RK3576 交叉编译和板端正常运行回归。
 14. 纯 C 的单车道 `parking_controller` 状态机核心已实现，支持入口/出口模式、业务检查、模拟支付、Gate 状态、通行来源、超时、完成提交和错误复位；
-15. `parking_controller` 已拆入独立 `parking_business_lib` 并通过严格告警检查和 RK3576 交叉编译，但尚未接入 `main.c`、SQLite 或真实 Gate。
+15. `parking_controller` 已拆入独立 `parking_business_lib` 并通过严格告警检查和 RK3576 交叉编译；
+16. 正式 `main.c` 已支持 `--lane-mode entry|exit`，会取空稳定事件 FIFO、驱动状态机，并用日志/dry-run 自动响应检查、支付、开关闸和提交命令；该 dry-run 版本已在板端完成入口和出口回归。
+17. 新增纯 C 的 `parking_plate_policy`：验证 UTF-8 和 7/8 字符车牌格式，在单次业务进行中忽略完全相同的重复事件、拒绝编辑距离为 1 的歧义事件，并把其他车辆识别为车道忙碌；不会把相似字符串自动合并成同一车牌。
+18. `test_parking_plate_policy` 已在 RK3576 板端运行成功；用户同时确认入口和出口 dry-run 流程验证成功，但未提供完整日志或新增性能数据。
+19. 新增独立纯 C `parking_storage_lib` 和 SQLite schema v1，实现停车事件、停车会话、聚合车位统计、事务、唯一约束、持久化 operation ID、重复完成幂等以及进程重启后未完成操作复用；宿主测试和 RK3576 交叉编译均已通过。
+20. 正式 `main.c` 已把入/出场检查和完成提交从进程内模拟替换为 SQLite，默认数据库为 `parking.db`，也可用 `--database PATH` 指定；支付和 Gate 仍保持 dry-run，不访问 PWM。
 
-当前没有已知编译或运行卡点。下一阶段应把稳定车牌 FIFO 接入 `parking_controller`，先用日志/dry-run 执行业务命令，再设计 SQLite；不要继续重写已经通过真机验证的 Camera、Recognizer、Gate 和管线线程逻辑。
+当前没有已知编译卡点。下一步应在 RK3576 板端先运行 `test_parking_store`，确认系统提供 `libsqlite3.so.0` 或 `libsqlite3.so`，再用同一个数据库依次回归正式主程序的入场、重启和出场持久化链路；不要继续重写已经通过真机验证的 Camera、Recognizer、Gate 和管线线程逻辑。
 
 ## 2. 当前结论速览
 
@@ -72,16 +77,19 @@ src/main.c 正式管线与 Display 集成            已完成并在 RK3576 板�
 parking 稳定车牌事件日志                      已在 RK3576 板端验证
 parking 正式 Gate 集成                        尚未开始
 稳定事件有界 FIFO                             已实现、交叉编译并完成板端正常路径验证
-parking_controller 业务状态机核心             已实现并交叉编译，尚未接入主循环
+parking_controller + main dry-run              已完成入口/出口板端业务回归
+parking_plate_policy                           已完成宿主与 RK3576 板端回归
+parking_storage_lib + SQLite schema v1         已实现、宿主测试通过并交叉编译，尚待板端回归
+parking SQLite 检查/提交集成                   已实现并交叉编译，尚待板端回归
 LVGL / 原生 DRM/KMS                          尚未接入
-SQLite、MQTT、正式计费/支付、OTA               尚未实现
+MQTT、正式计费/支付、OTA                       尚未实现
 ```
 
 有界 FIFO 的正常运行路径已经随正式 `parking` 主程序在板端回归成功，但没有专门制造 32 个事件积压，因此满队列溢出、丢弃统计和失败停止路径尚未真机验证。用户明确不需要为本次 FIFO 新增独立单元测试；不能把未执行的溢出测试写成已经通过。
 
 用户没有提供本次正式 `parking` 主程序的具体 FPS、转换耗时、识别耗时、显示耗时、端到端延迟、丢帧数或芯片温度日志。不得编造这些数据；如需做性能对比，应请用户提供板端输出。
 
-2026-09-15 正式主程序板端日志确认 LCD 为 `1024x600`、Camera 为 `/dev/video0` 的 `1280x720@30`，并输出了多个稳定车牌事件。日志中出现过 `粤A3333G`、`粤A3333` 等相近字符串；不能仅凭日志断言它们来自同一块实体车牌，但该现象说明在进入数据库前必须设计业务去重和异常识别处理，不能把每个稳定识别事件直接当作一次入场。
+2026-09-15 正式主程序板端日志确认 LCD 为 `1024x600`、Camera 为 `/dev/video0` 的 `1280x720@30`，并输出了多个稳定车牌事件。日志中出现过 `粤A3333G`、`粤A3333` 等相近字符串；不能仅凭日志断言它们来自同一块实体车牌。当前业务策略会把 6 字符的 `粤A3333` 判为 `INVALID_PLATE`，把业务进行中与活动车牌只差 1 个 UTF-8 字符的合法车牌判为 `AMBIGUOUS_PLATE`，不会自动改写或合并后写入停车记录。
 
 Gate 仍无物理限位、地感、防砸或车辆通过信号。当前自动关闸只依据“连续 10 秒没有识别到有效车牌”的软件计时，因此不能把当前原型当成可无人看守运行的安全系统。
 
@@ -98,7 +106,7 @@ src/pipeline/plate_event_queue.c
 src/pipeline/plate_pipeline.c
 ```
 
-`plate_event_queue` 是 `plate_pipeline` 的私有实现模块，不属于业务层公开接口。当前 FIFO 相关文件和管线修改尚未提交；它们属于用户资产，不得删除或恢复。
+`plate_event_queue` 是 `plate_pipeline` 的私有实现模块，不属于业务层公开接口。FIFO 及管线改造已包含在提交 `ae032da`（“更新了FIFO”）中；当前工作树没有这几个文件的未提交修改。不要因为它们已提交就重新设计或恢复旧的单事件槽实现。
 
 ### 3.2 责任边界
 
@@ -315,11 +323,18 @@ CMake 目标：parking
 SIGINT/SIGTERM 安全退出标志
 Display 创建与主线程显示
 plate_pipeline 配置、创建、启动、停止和销毁
-稳定车牌事件日志
+取空稳定车牌事件 FIFO
+parking_controller 状态机驱动
+--lane-mode entry|exit
+--database PATH（默认 parking.db）
+SQLite 入/出场检查和完成提交
+模拟支付与 Gate 状态
 绘制帧获取与 pipeline_frame_release
 ```
 
-`parking` 通过 `plate_pipeline_lib` 自动获得 `parking_lib`、`plate_recognizer_lib` 和 `Threads::Threads` 依赖。主程序不直接访问 Camera、Recognizer 或管线内部线程，也尚未接入 Gate、SQLite、LVGL、MQTT、计费、支付或 OTA。
+`parking` 链接 `plate_pipeline_lib`、`parking_business_lib` 和 `parking_storage_lib`，并通过前者自动获得 `parking_lib`、`plate_recognizer_lib` 和 `Threads::Threads` 依赖。主程序不直接访问 Camera、Recognizer 或管线内部线程。入/出场检查、持久化 operation ID、停车会话提交和聚合车位统计已经使用 SQLite 事务；当前出口费用仍固定为 200 分，支付与 Gate 仍为日志/dry-run。尚未接入正式 Gate、正式计费/支付、LVGL、MQTT 或 OTA。
+
+数据库时间使用 `CLOCK_REALTIME` 的 Unix epoch 微秒，状态机超时仍使用 `CLOCK_MONOTONIC`；不能把两种时间直接混用。入场检查会创建持久化 `PENDING` 操作并预留容量，连续 10 秒无有效车牌、模拟关闸后才提交正式在场会话；出场完成后才关闭会话并释放车位。同一车牌的未完成操作在进程重启后会返回原 `operation_id`，完成接口可重复调用。
 
 开发过程中曾出现屏幕无画面，根因是 `src/main.c` 中：
 
@@ -477,8 +492,22 @@ cmake -S . -B build-rk3576-release \
 
 cmake --build build-rk3576-release \
   --target parking \
-           test_realtime_recognizer_threaded \
-           test_realtime_plate_gate \
+  -j"$(nproc)"
+
+cmake --build build-rk3576-release \
+  --target test_realtime_recognizer_threaded \
+  -j"$(nproc)"
+
+cmake --build build-rk3576-release \
+  --target test_realtime_plate_gate \
+  -j"$(nproc)"
+
+cmake --build build-rk3576-release \
+  --target test_parking_plate_policy \
+  -j"$(nproc)"
+
+cmake --build build-rk3576-release \
+  --target test_parking_store \
   -j"$(nproc)"
 ```
 
@@ -490,6 +519,10 @@ cmake --build build-rk3576-release \
 - 第一版正式 `parking` 主程序交叉编译并链接；
 - `plate_event_queue.c` 已加入 `plate_pipeline_lib`，单个事件槽已替换为有界 FIFO；
 - `parking_controller.c` 已加入独立 `parking_business_lib`，并由正式 `parking` 链接；
+- `parking_plate_policy.c` 已加入 `parking_business_lib`，对应纯 C 策略测试在宿主运行通过并完成 RK3576 交叉编译；
+- `parking_store.c` 已加入独立 `parking_storage_lib`，纯 C 临时数据库测试在宿主运行通过并完成 RK3576 交叉编译；
+- `parking_store.c`、`test_parking_store.c` 和更新后的 `main.c` 已使用 RK3576 工具链通过 `-Wall -Wextra -Wpedantic -Werror` 编译检查；
+- `main.c` 已接入 `parking_controller` 和 SQLite 执行器，支持 `--lane-mode entry|exit` 与 `--database PATH`；
 - 产物确认为 ARM aarch64；
 - `plate_event_queue.c` 和 `plate_pipeline.c` 额外使用 `-Wall -Wextra -Wpedantic -Werror` 编译通过；
 - `parking_controller.c` 使用宿主和 RK3576 工具链的 `-Wall -Wextra -Wpedantic -Werror` 检查通过；
@@ -498,6 +531,7 @@ cmake --build build-rk3576-release \
 - 用户完成迁移后真实 Gate 回归；
 - 用户完成第一版正式 `parking` 主程序板端回归，确认屏幕显示和稳定车牌日志成功；
 - 用户确认包含稳定事件 FIFO 的正式 `parking` 版本在 RK3576 板端测试成功。此次确认属于正常运行回归，没有提供专门的满队列溢出日志或新增性能数字。
+- 用户确认 `test_parking_plate_policy`、`parking --lane-mode entry` 和 `parking --lane-mode exit` 的上一版 dry-run 已在板端验证成功；未提供完整日志或新增性能数字。
 
 运行正式主程序时板端需要：
 
@@ -509,12 +543,18 @@ fonts/platech.ttf
 lib/librknnrt.so
 ```
 
-两个测试程序只在回归对应测试时部署，不是运行 `parking` 的必需文件：
+新版本还要求板端系统动态库提供 `libsqlite3.so.0` 或 `libsqlite3.so`。当前 LubanCat GCC sysroot 没有 SQLite 开发包，因此 `parking_storage_lib` 在运行时通过 `dlopen` 加载板端 SQLite，不把宿主库错误链接进 ARM64 产物。数据库文件及其 `-wal`/`-shm` 同目录必须可写。
+
+四个测试程序只在回归对应测试时部署，不是运行 `parking` 的必需文件：
 
 ```text
 test_realtime_recognizer_threaded
 test_realtime_plate_gate
+test_parking_plate_policy
+test_parking_store
 ```
+
+其中 `test_parking_plate_policy` 和 `test_parking_store` 不访问摄像头、NPU、Display 或 Gate，可直接在板端运行；成功时分别输出 `parking_plate_policy: all tests passed` 和 `parking_store: all tests passed`。`test_parking_store` 使用 `/tmp` 临时数据库并在结束时清理。
 
 识别目标通过 `$ORIGIN/lib` 使用部署目录里的 `librknnrt.so`。不要覆盖系统 `/lib/librknnrt.so`。
 
@@ -524,24 +564,41 @@ test_realtime_plate_gate
 
 ```text
 branch: feature/status
-HEAD:   ae032da “更新了FIFO”
+HEAD:   f5b4870 “添加状态及”
 ```
 
 写入本文后预期工作树：
 
 ```text
- M CMakeLists.txt
  M HANDOFF.md
-?? include/parking_controller.h
-?? src/business/parking_controller.c
+ M CMakeLists.txt
+ M include/parking_controller.h
+ M src/business/parking_controller.c
+ M src/main.c
+?? include/parking_plate_policy.h
+?? include/parking_store.h
+?? src/business/parking_plate_policy.c
+?? src/storage/parking_store.c
+?? tests/test_parking_plate_policy.c
+?? tests/test_parking_store.c
 ```
 
 具体含义：
 
-- `CMakeLists.txt`：新增独立 `parking_business_lib`，并让 `parking` 链接该业务库；
-- `include/parking_controller.h`：新增车道模式、状态、事件、命令、原因、超时配置和公开接口；
-- `src/business/parking_controller.c`：新增不直接依赖 Camera、Gate、SQLite 或网络的单车道状态机；
+- `include/parking_controller.h`：在已提交的状态机接口上新增 `AMBIGUOUS_PLATE` 原因和可读通行来源名称；
+- `src/business/parking_controller.c`：接入车牌事件策略，增加歧义原因和可读通行来源输出；
+- `src/main.c`：将 FIFO 稳定事件送入状态机，使用 SQLite 执行入/出场检查和完成提交；新增 `--database PATH`，支付与开关闸继续 dry-run；
+- `include/parking_plate_policy.h`、`src/business/parking_plate_policy.c`：新增 UTF-8 车牌格式验证、重复事件和单字符歧义分类；
+- `tests/test_parking_plate_policy.c`：新增不访问硬件的纯 C 策略测试；
+- `include/parking_store.h`、`src/storage/parking_store.c`：新增 SQLite schema v1、事务、幂等操作、停车会话和聚合车位存储；
+- `tests/test_parking_store.c`：新增不访问硬件的纯 C 临时数据库测试，覆盖容量预留、业务拒绝、重启恢复和重复提交；
+- `CMakeLists.txt`：将策略实现加入业务库，新增 `parking_storage_lib`、`test_parking_plate_policy` 和 `test_parking_store` 目标，并让 `parking` 链接存储库；
 - `HANDOFF.md`：本交接更新。
+
+`f5b4870` 已经提交了 `parking_business_lib`、状态机基础文件和对应 CMake 配置；不要把这些已提交内容误判为缺失。
+`ae032da` 已经提交了稳定事件 FIFO 及管线集成；不要把它误写成当前未提交改动。
+
+普通 `git diff` 不会显示当前未跟踪文件的内容，必须直接阅读车牌策略和停车存储的新文件，不能误判为不存在或无修改。
 
 以上全部是用户资产。不要 reset、checkout、clean、恢复旧版或删除未跟踪文件。不要擅自提交；如需 commit，应先让用户确认提交范围和提交信息。
 
@@ -559,10 +616,12 @@ rm -rf build-rk3576-release
 
 ```bash
 git status --short
-git diff -- CMakeLists.txt HANDOFF.md
+git diff -- CMakeLists.txt HANDOFF.md include/parking_controller.h \
+  include/parking_plate_policy.h include/parking_store.h \
+  src/business/parking_controller.c src/business/parking_plate_policy.c \
+  src/storage/parking_store.c src/main.c \
+  tests/test_parking_plate_policy.c tests/test_parking_store.c
 ```
-
-注意：普通 `git diff` 不显示未跟踪的 `include/parking_controller.h` 和 `src/business/parking_controller.c`，必须直接阅读，不能误判为不存在或无修改。
 
 并直接阅读当前正式接口、主程序和相关构建配置：
 
@@ -572,8 +631,12 @@ sed -n '1,260p' src/pipeline/plate_event_queue.h
 sed -n '1,320p' src/pipeline/plate_event_queue.c
 sed -n '1,760p' src/pipeline/plate_pipeline.c
 sed -n '1,320p' include/parking_controller.h
+sed -n '1,260p' include/parking_plate_policy.h
+sed -n '1,260p' include/parking_store.h
 sed -n '1,760p' src/business/parking_controller.c
-sed -n '1,260p' src/main.c
+sed -n '1,360p' src/business/parking_plate_policy.c
+sed -n '1,1200p' src/storage/parking_store.c
+sed -n '1,700p' src/main.c
 sed -n '1,260p' CMakeLists.txt
 ```
 
@@ -582,18 +645,19 @@ sed -n '1,260p' CMakeLists.txt
 当前没有已知编译卡点或正在诊断的崩溃。真正未完成的是：
 
 1. 尚未专门验证稳定事件 FIFO 的满队列溢出、丢弃统计和失败停止路径；用户不要求为本次 FIFO 新增独立单元测试；
-2. 尚未定义识别字符串波动时的业务去重、置信度策略和异常处理；
-3. `parking_controller` 核心已实现，但尚未接入 `main.c`，也尚未执行板端业务流程验证；
-4. 尚未实现 SQLite schema、事务、停车记录和车位管理，因此检查与完成命令还没有持久化执行者；
-5. 正式 `parking` 主程序尚未接入 Gate；真实 Gate 仍只在受控测试中使用；
-6. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
-7. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
-8. 管线对象 stop 后不能再次 start；
-9. 管线尚未提供查询 Camera 实际协商宽高/FPS/格式的接口；
-10. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
-11. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
-12. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
-13. 尚未实现 LVGL、MQTT、正式计费/支付和 OTA。
+2. 第一版单次业务内车牌去重和歧义策略及入口/出口 dry-run 已在板端回归成功，但没有收到完整真实识别波动日志；当前只有检测框置信度，没有 OCR 字符置信度，不能实现字符级置信度仲裁；
+3. SQLite schema v1、事务、停车记录、聚合车位统计和正式主程序集成已经实现并交叉编译，但尚未在板端确认 SQLite 共享库、数据库创建、入场持久化、进程重启和出场关闭会话的完整链路；
+4. 当前只实现固定 200 分的原型费用，没有按停车时长计费；支付仍是 dry-run。`parking_spaces` 当前只有全场总数/占用数，不是具体 A01/A02 车位分配；
+5. SQLite 未完成 operation 会跨重启保留并在同一车牌再次检查时复用，不会擅自推断车辆是否已经通过；当前尚无人工列出/取消长期遗留 operation 的管理接口，因此启动日志会显示未完成入场数量；
+6. 正式 `parking` 主程序尚未接入 Gate；真实 Gate 仍只在受控测试中使用；
+7. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
+8. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
+9. 管线对象 stop 后不能再次 start；
+10. 管线尚未提供查询 Camera 实际协商宽高/FPS/格式的接口；
+11. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
+12. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
+13. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
+14. 尚未实现 LVGL、MQTT、正式计费/支付和 OTA。
 
 ## 9. 下一步计划
 
@@ -638,43 +702,108 @@ ERROR
 
 控制器接收稳定车牌、业务检查结果、支付结果、Gate 状态、车辆通过、提交结果和复位事件，输出检查入/出场、请求支付、开/关闸、完成入/出场、拒绝和报告错误等命令。`parking_controller_tick()` 使用单调时钟处理检查、支付、Gate、通行、提交和拒绝冷却超时；`WAIT_PASSAGE` 会结合 `plate_pipeline_last_plate_seen_us()`，连续默认 10 秒没有看到车牌后输出关闸命令，并把来源标为 `PARKING_PASSAGE_VISION_TIMEOUT`。
 
-状态机核心已加入独立 `parking_business_lib`，通过宿主严格告警检查、RK3576 严格告警检查和交叉编译。当前尚未接入 `main.c`，也没有 SQLite 或 Gate 命令执行者，因此还不能把它写成完整停车业务已经运行成功。
+状态机核心已加入独立 `parking_business_lib`，通过宿主严格告警检查、RK3576 严格告警检查和交叉编译。入口和出口全 dry-run 版本已经在板端回归成功。当前正式 `main.c` 继续由主线程取空稳定事件 FIFO 并驱动控制器，但检查和完成提交已经替换为 SQLite 执行器；支付和 Gate 仍立即模拟成功，不访问 PWM。
 
-下一步把“识别事件”和“停车业务事件”接起来：
+当前 dry-run 链路为：
 
 ```text
 稳定识别车牌
-    -> 去重/异常判断
-    -> 入场请求或出场请求
-    -> Gate 动作请求
-    -> 车辆通过确认（当前没有物理传感器，只能标明原型限制）
-    -> 入场完成或出场完成
+    -> parking_controller
+    -> SQLite 入场/出场检查并创建持久化 PENDING operation
+    -> 出口模式固定 200 分 + 模拟支付
+    -> 模拟 Gate OPENED
+    -> 连续 10 秒没有看到车牌
+    -> VISION_TIMEOUT + 模拟 Gate CLOSED
+    -> SQLite 事务完成入场/出场提交
 ```
 
-第一版先使用日志/dry-run 响应状态机命令，不访问真实 PWM。不能直接使用“识别到一次车牌就 INSERT 一条停车记录”的逻辑。相近字符串、重复识别、程序重启和未完成动作仍需要在业务策略和 SQLite 中明确处理。
+此前全 dry-run 链路已在板端成功；当前 SQLite 版本已经交叉编译但尚未板端回归。SQLite 检查和提交是真实持久化，支付与 Gate 仍是模拟，不能把固定 200 分费用或模拟支付称为正式计费/支付。
 
-### 9.3 再接入 SQLite
+### 9.3 车牌事件策略第一版已实现
 
-状态机语义稳定后再设计并实现：
+新增文件：
 
 ```text
-schema_version
-parking_sessions
-parking_events
-parking_spaces
-事务、唯一约束、崩溃恢复和幂等更新
+include/parking_plate_policy.h
+src/business/parking_plate_policy.c
+tests/test_parking_plate_policy.c
 ```
 
-数据库可以提前设计接口和 schema，但不要在事件 FIFO 与业务语义完成前把原始识别事件直接写成正式停车记录。
+策略位于稳定事件 FIFO 与状态机业务处理之间，由 `parking_controller` 调用：
 
-### 9.4 后续功能
+```text
+非法 UTF-8、非 7/8 字符或不符合模型车牌字符集
+    -> INVALID_PLATE
+业务进行中与活动车牌完全相同
+    -> IGNORE_DUPLICATE，不重复触发业务命令
+业务进行中与活动车牌的 UTF-8 编辑距离为 1
+    -> AMBIGUOUS_PLATE，拒绝且不自动合并
+业务进行中出现差异更大的合法车牌
+    -> LANE_BUSY
+IDLE + 合法车牌
+    -> ACCEPT
+```
+
+`detect_confidence` 是检测框置信度而不是 OCR 字符置信度。策略只校验它是 `[0,1]` 内的有限值，低阈值仍由 `plate_pipeline.confidence_threshold = 0.30` 统一过滤，不能宣称已经实现字符级置信度判断。宿主纯 C 测试和 RK3576 板端回归均已通过。
+
+### 9.4 SQLite schema v1 与存储层已实现
+
+新增文件：
+
+```text
+include/parking_store.h
+src/storage/parking_store.c
+tests/test_parking_store.c
+```
+
+schema v1 包含：
+
+```text
+schema_version       固定单行 schema 版本
+parking_events       入/出场 PENDING、COMMITTED、REJECTED 事件
+parking_sessions     在场/已离场停车会话、费用和 operation ID
+parking_spaces       全场总车位、已占用车位和更新时间
+```
+
+关键语义：
+
+- 所有检查和完成操作使用 `BEGIN IMMEDIATE` 事务；启用 WAL、`synchronous=FULL` 和 busy timeout；
+- 活跃会话按车牌建立部分唯一索引，未完成操作按“事件类型 + 车牌”建立部分唯一索引；
+- 入场检查创建 `PENDING` 操作并计入容量预留，避免并发批准超过总车位；
+- 重启后同一车牌再次检查会返回原持久化 `operation_id`；
+- 完成接口对已 `COMMITTED` 的同一 operation 可重复调用；
+- 入场完成才创建活动会话并增加占用数，出场完成才关闭会话并释放车位；
+- 业务拒绝也写入 `parking_events` 审计；
+- 数据库时间使用 Unix epoch 微秒，不能使用状态机的单调时钟时间；
+- 当前 `parking_spaces` 是聚合统计，不提供具体车位分配；费用仍固定 200 分。
+
+宿主严格告警编译、临时数据库功能测试、ASan/UBSan（关闭当前受限环境不支持的 leak 检查）、RK3576 严格告警编译和 ARM64 链接均已通过。LubanCat GCC sysroot 没有 SQLite 开发包，因此实现通过 `dlopen`/`dlsym` 使用板端系统 SQLite ABI；ARM64 产物不会错误依赖宿主 SQLite。
+
+下一步在板端按以下顺序验证：
+
+```bash
+./test_parking_store
+./parking --lane-mode entry --database parking.db
+# 入场完成后退出并保留同一个 parking.db
+./parking --lane-mode exit --database parking.db
+```
+
+存储测试成功应输出：
+
+```text
+parking_store: all tests passed
+```
+
+入口模式应看到 SQLite 检查通过、持久化 operation ID、模拟开关闸以及 `SQLite 入场完成`。退出进程后数据库必须保留；出口模式使用同一车牌和同一数据库，应查到活动会话，显示固定费用 200 分，模拟支付和 Gate 后输出 `SQLite 出场完成`。随后再次运行出口模式，同一车牌应被 `NO_ACTIVE_SESSION` 拒绝。保存完整日志和数据库文件；该板端验证尚未执行。
+
+### 9.5 后续功能
 
 建议顺序：
 
 ```text
-状态机接入 main.c（日志/dry-run）
-    -> 去重与异常识别策略
-    -> SQLite 停车记录和车位
+板端验证 test_parking_store
+    -> 板端验证 SQLite 入场、重启、出场持久化链路
+    -> 正式按停车时长计费与支付接口
     -> 安全接入正式主程序 Gate
     -> LVGL UI
     -> MQTT/JSON
@@ -686,7 +815,7 @@ parking_spaces
 
 正式 UI 使用 LVGL；当前 `display.c` 保留为测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
 
-### 9.5 最后再处理性能与散热
+### 9.6 最后再处理性能与散热
 
 整个业务完成后，再考虑 `recognition_interval_ms`、温度监测、NPU 占用和散热优化。不能在没有用户新指示时改变当前无限速推理和 3 帧确认的响应特性。
 
@@ -786,7 +915,7 @@ polarity=inversed
 
 ### 10.15 不要把规划或旧数据写成当前事实
 
-正式 `plate_pipeline`、独立 `plate_pipeline_lib`、稳定事件有界 FIFO、两个迁移后的测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试、正式主程序的屏幕显示和稳定车牌日志，以及包含 FIFO 的正式主程序正常路径在板端成功。可以陈述这些事实，但不能把 FIFO 满队列路径写成已验证，也不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。正式主程序 Gate、入/出场业务、SQLite、LVGL、MQTT、计费、支付、OTA 仍未实现。
+正式 `plate_pipeline`、独立 `plate_pipeline_lib`、稳定事件有界 FIFO、两个迁移后的硬件测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试、正式主程序的屏幕显示和稳定车牌日志、FIFO 正常路径、车牌策略测试以及入口/出口全 dry-run 状态机流程在板端成功。可以陈述这些事实，但不能把 FIFO 满队列路径或当前 SQLite 版本写成已完成板端验证，也不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。SQLite schema v1、存储测试和正式主程序集成已实现、通过宿主测试并完成 ARM64 交叉编译；正式主程序 Gate、正式计费/支付、LVGL、MQTT 和 OTA 尚未实现。
 
 ### 10.16 不要擅自给 RKNN 限速
 
@@ -809,6 +938,10 @@ if (result == PLATE_PIPELINE_CLOSED)
 
 不要在 `if` 后误加分号，也不要把 `==` 写成 `=`。此前这两个错误曾导致 `display_present()` 永远不可达，并让成功取出的 BGR 帧因未调用 `pipeline_frame_release()` 而泄漏。
 
+### 10.19 不要把相似车牌自动当成同一辆车
+
+车牌字符串是 UTF-8，距离必须按 Unicode 码点计算，不能按字节计算。业务进行中与活动车牌完全一致才可作为重复事件忽略；编辑距离为 1 的合法字符串只能标记为 `AMBIGUOUS_PLATE`，不能自动纠正、覆盖或合并。`detect_confidence` 是检测框置信度，不是 OCR 字符置信度，不能据此声称已经实现字符级仲裁。当前策略覆盖单次状态机业务内去重；跨业务的活跃车牌唯一性、未完成 operation 复用和重复提交幂等已经由 SQLite v1 约束与事务处理，但当前 SQLite 链路尚待板端验证。
+
 ## 11. 新会话开场清单
 
 用户下次第一句话只会说：
@@ -821,12 +954,12 @@ if (result == PLATE_PIPELINE_CLOSED)
 
 1. 完整阅读本文；
 2. 执行 `git status --short`，不清理任何修改；
-3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`include/parking_controller.h`、`src/business/parking_controller.c`、`src/main.c` 和 `CMakeLists.txt`；
+3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`include/parking_controller.h`、`src/business/parking_controller.c`、`include/parking_plate_policy.h`、`src/business/parking_plate_policy.c`、`include/parking_store.h`、`src/storage/parking_store.c`、`src/main.c` 和 `CMakeLists.txt`；
 4. 阅读两个迁移后的测试，理解 Display 和 Gate 仍属于主线程/业务层；
-5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序，以及 FIFO 版本的正常运行路径都已经板端成功；满队列溢出路径尚未专门验证；
+5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序、FIFO 正常路径、入口/出口全 dry-run 和车牌策略都已经板端成功；SQLite v1 已实现、宿主测试通过并完成 ARM64 交叉编译，但尚未板端验证；满队列溢出路径尚未专门验证；
 6. 不要把 `src/main.c` 恢复成占位程序，也不要重新复制 Camera、Recognizer 或管线线程逻辑；
 7. 不要重新从摄像头、MIPI、RKNN 或 PWM 是否存在开始排查，除非硬件环境发生变化；
-8. 默认下一步是把 FIFO 稳定事件接入 `parking_controller`，使用日志/dry-run 执行状态机命令，再定义车牌去重策略和 SQLite；
+8. 默认下一步是板端验证 `test_parking_store`，再使用同一个 `parking.db` 依次验证入场、进程重启、出场和再次出场拒绝；
 9. 修改前说明文件范围；
 10. 不运行真实 Gate 自动测试，不把真实 Gate 默认接入主程序；
 11. 不擅自处理 RKNN 发热或改变推理频率；

@@ -48,6 +48,7 @@ typedef enum {
 typedef enum {
     PARKING_REASON_NONE = 0,
     PARKING_REASON_INVALID_PLATE,
+    PARKING_REASON_AMBIGUOUS_PLATE,
     PARKING_REASON_LANE_BUSY,
     PARKING_REASON_LANE_UNAVAILABLE,
     PARKING_REASON_ALREADY_INSIDE,
@@ -196,6 +197,8 @@ int parking_controller_copy_last_error(
 const char *parking_controller_state_name(parking_state_t state);
 const char *parking_controller_command_name(parking_command_type_t command);
 const char *parking_controller_reason_name(parking_reason_t reason);
+const char *parking_controller_passage_source_name(
+    parking_passage_source_t source);
 
 #ifdef __cplusplus
 }
