@@ -52,6 +52,7 @@ target_link_libraries(parking_lib
 # 停车业务状态机（不直接依赖 Camera、Gate、SQLite 或网络）
 add_library(parking_business_lib STATIC
     src/business/parking_controller.c
+    src/business/parking_fee.c
     src/business/parking_plate_policy.c
 )
 
@@ -140,6 +141,16 @@ target_link_libraries(test_parking_plate_policy
         parking_business_lib
 )
 
+# 纯 C 停车计费测试（不访问数据库或硬件）
+add_executable(test_parking_fee
+    tests/test_parking_fee.c
+)
+
+target_link_libraries(test_parking_fee
+    PRIVATE
+        parking_business_lib
+)
+
 # 纯 C SQLite 停车存储测试（使用临时数据库，不访问硬件）
 add_executable(test_parking_store
     tests/test_parking_store.c
@@ -148,6 +159,7 @@ add_executable(test_parking_store
 target_link_libraries(test_parking_store
     PRIVATE
         parking_storage_lib
+        parking_business_lib
 )
 
 # 摄像头测试

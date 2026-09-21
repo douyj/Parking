@@ -1,6 +1,7 @@
 #include "display.h"
 #include "log.h"
 #include "parking_controller.h"
+#include "parking_fee.h"
 #include "parking_store.h"
 #include "plate_pipeline.h"
 
@@ -31,6 +32,7 @@
 
 typedef struct {
     parking_controller_t *controller;
+    parking_fee_t *fee;
     parking_store_t *store;
 } parking_demo_t;
 
@@ -179,6 +181,24 @@ static parking_reason_t map_store_reason(parking_store_reason_t reason)
     }
 }
 
+static int calculate_parking_fee(void *context,
+                                 uint64_t entry_time_unix_us,
+                                 uint64_t exit_time_unix_us,
+                                 uint64_t *fee_cents)
+{
+    parking_fee_status_t status;
+
+    status = parking_fee_calc((parking_fee_t *)context,
+                              entry_time_unix_us,
+                              exit_time_unix_us,
+                              fee_cents);
+    if (status == PARKING_FEE_OK)
+        return 0;
+
+    LOG_ERROR("计算停车费失败: %s", parking_fee_status_name(status));
+    return -1;
+}
+
 static int execute_demo_commands(parking_demo_t *demo,
                                  const parking_command_list_t *commands,
                                  uint64_t now_us,
@@ -245,7 +265,8 @@ static int execute_demo_commands(parking_demo_t *demo,
                 memset(&check_result, 0, sizeof(check_result));
                 if (parking_store_check_exit(
                         demo->store, command->plate_number,
-                        database_now_us, &check_result) != 0) {
+                        database_now_us, calculate_parking_fee,
+                        demo->fee, &check_result) != 0) {
                     log_store_error(demo, "SQLite 出场检查失败");
                     return -1;
                 }
@@ -514,6 +535,7 @@ int main(int argc, char **argv)
     parking_demo_t demo;
     plate_pipeline_t *pipeline = NULL;
     parking_controller_t *controller = NULL;
+    parking_fee_t *fee = NULL;
     parking_store_t *store = NULL;
     display_t *display = NULL;
     parking_lane_mode_t lane_mode;
@@ -540,12 +562,16 @@ int main(int argc, char **argv)
     if (controller == NULL)
         goto cleanup;
 
+    fee = parking_fee_create();
+    if (fee == NULL) {
+        LOG_ERROR("创建停车计费模块失败");
+        goto cleanup;
+    }
+
     memset(&store_config, 0, sizeof(store_config));
     store_config.database_path = database_path;
     store_config.initial_total_spaces =
         PARKING_STORE_DEFAULT_TOTAL_SPACES;
-    store_config.default_exit_fee_cents =
-        PARKING_STORE_DEFAULT_EXIT_FEE_CENTS;
     store_config.busy_timeout_ms =
         PARKING_STORE_DEFAULT_BUSY_TIMEOUT_MS;
 
@@ -567,6 +593,7 @@ int main(int argc, char **argv)
 
     memset(&demo, 0, sizeof(demo));
     demo.controller = controller;
+    demo.fee = fee;
     demo.store = store;
 
     memset(&display_config, 0, sizeof(display_config));
@@ -618,8 +645,9 @@ int main(int argc, char **argv)
 cleanup:
     plate_pipeline_stop(pipeline);
     plate_pipeline_destroy(pipeline);
-    parking_controller_destroy(controller);
     parking_store_close(store);
+    parking_fee_destroy(fee);
+    parking_controller_destroy(controller);
     display_destroy(display);
 
     return exit_code;

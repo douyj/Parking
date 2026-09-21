@@ -55,7 +55,6 @@ struct parking_store {
     void *sqlite_library;
     sqlite_api_t api;
     sqlite3 *database;
-    uint64_t default_exit_fee_cents;
     char last_error[PARKING_STORE_ERROR_CAPACITY];
 };
 
@@ -498,14 +497,16 @@ static int find_pending_operation(parking_store_t *store,
 
 static int find_active_session(parking_store_t *store,
                                const char *plate_number,
-                               uint64_t *session_id)
+                               uint64_t *session_id,
+                               uint64_t *entry_time_unix_us)
 {
     static const char sql[] =
-        "SELECT id FROM parking_sessions "
+        "SELECT id, entry_time_unix_us FROM parking_sessions "
         "WHERE plate_number = ? AND status = 0 ORDER BY id LIMIT 1";
     sqlite3_stmt *statement = NULL;
     int step_result;
     int64_t id;
+    int64_t entry_time;
 
     if (prepare_statement(store, sql, &statement,
                           "准备查询在场车辆失败") != 0)
@@ -528,13 +529,16 @@ static int find_active_session(parking_store_t *store,
     }
 
     id = store->api.column_int64(statement, 0);
+    entry_time = store->api.column_int64(statement, 1);
     store->api.finalize(statement);
-    if (id <= 0) {
-        set_error(store, "在场车辆记录 ID 无效");
+    if (id <= 0 || entry_time <= 0) {
+        set_error(store, "在场车辆记录无效");
         return -1;
     }
 
     *session_id = (uint64_t)id;
+    if (entry_time_unix_us != NULL)
+        *entry_time_unix_us = (uint64_t)entry_time;
     return 1;
 }
 
@@ -606,7 +610,6 @@ parking_store_t *parking_store_open(const parking_store_config_t *config)
 {
     parking_store_t *store;
     uint32_t initial_total_spaces;
-    uint64_t exit_fee_cents;
     int busy_timeout_ms;
     int flags;
 
@@ -617,22 +620,17 @@ parking_store_t *parking_store_open(const parking_store_config_t *config)
     initial_total_spaces = config->initial_total_spaces != 0U
         ? config->initial_total_spaces
         : PARKING_STORE_DEFAULT_TOTAL_SPACES;
-    exit_fee_cents = config->default_exit_fee_cents != 0U
-        ? config->default_exit_fee_cents
-        : PARKING_STORE_DEFAULT_EXIT_FEE_CENTS;
     busy_timeout_ms = config->busy_timeout_ms > 0
         ? config->busy_timeout_ms
         : PARKING_STORE_DEFAULT_BUSY_TIMEOUT_MS;
 
-    if (initial_total_spaces > (uint32_t)INT_MAX ||
-        exit_fee_cents > (uint64_t)INT64_MAX)
+    if (initial_total_spaces > (uint32_t)INT_MAX)
         return NULL;
 
     store = calloc(1, sizeof(*store));
     if (store == NULL)
         return NULL;
 
-    store->default_exit_fee_cents = exit_fee_cents;
     if (load_sqlite(store) != 0)
         goto fail;
 
@@ -726,7 +724,8 @@ int parking_store_check_entry(parking_store_t *store,
         return 0;
     }
 
-    query_result = find_active_session(store, plate_number, &session_id);
+    query_result = find_active_session(store, plate_number, &session_id,
+                                       NULL);
     if (query_result < 0)
         goto fail;
     if (query_result == 1) {
@@ -782,17 +781,20 @@ fail_without_rollback_error:
 int parking_store_check_exit(parking_store_t *store,
                              const char *plate_number,
                              uint64_t requested_at_unix_us,
+                             parking_store_fee_fn calculate_fee,
+                             void *fee_context,
                              parking_store_check_result_t *result)
 {
     uint64_t operation_id = 0;
     uint64_t session_id = 0;
+    uint64_t entry_time_unix_us = 0;
     uint64_t amount_cents = 0;
     uint32_t total_spaces;
     uint32_t occupied_spaces;
     uint32_t pending_entries;
     int query_result;
 
-    if (store == NULL || result == NULL ||
+    if (store == NULL || calculate_fee == NULL || result == NULL ||
         validate_plate(plate_number) != 0 ||
         validate_timestamp(requested_at_unix_us) != 0)
         return -1;
@@ -825,7 +827,8 @@ int parking_store_check_exit(parking_store_t *store,
         return 0;
     }
 
-    query_result = find_active_session(store, plate_number, &session_id);
+    query_result = find_active_session(store, plate_number, &session_id,
+                                       &entry_time_unix_us);
     if (query_result < 0)
         goto fail;
     if (query_result == 0) {
@@ -842,7 +845,15 @@ int parking_store_check_exit(parking_store_t *store,
         return 0;
     }
 
-    amount_cents = store->default_exit_fee_cents;
+    if (calculate_fee(fee_context, entry_time_unix_us,
+                      requested_at_unix_us, &amount_cents) != 0) {
+        set_error(store, "计算停车费失败");
+        goto fail;
+    }
+    if (amount_cents > (uint64_t)INT64_MAX) {
+        set_error(store, "停车费超出 SQLite 可存储范围");
+        goto fail;
+    }
     if (insert_event(store, STORE_EVENT_EXIT, plate_number, session_id,
                      requested_at_unix_us, amount_cents,
                      STORE_EVENT_PENDING, PARKING_STORE_REASON_NONE,

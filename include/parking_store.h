@@ -10,10 +10,14 @@ extern "C" {
 
 #define PARKING_STORE_PLATE_CAPACITY 32U
 #define PARKING_STORE_DEFAULT_TOTAL_SPACES 100U
-#define PARKING_STORE_DEFAULT_EXIT_FEE_CENTS 200ULL
 #define PARKING_STORE_DEFAULT_BUSY_TIMEOUT_MS 3000
 
 typedef struct parking_store parking_store_t;
+
+typedef int (*parking_store_fee_fn)(void *context,
+                                    uint64_t entry_time_unix_us,
+                                    uint64_t exit_time_unix_us,
+                                    uint64_t *fee_cents);
 
 typedef enum {
     PARKING_STORE_REASON_NONE = 0,
@@ -27,7 +31,6 @@ typedef struct {
 
     /* 仅在首次创建数据库时使用，已有数据库保留其原有容量。 */
     uint32_t initial_total_spaces;
-    uint64_t default_exit_fee_cents;
     int busy_timeout_ms;
 } parking_store_config_t;
 
@@ -73,9 +76,15 @@ int parking_store_check_entry(parking_store_t *store,
                               uint64_t requested_at_unix_us,
                               parking_store_check_result_t *result);
 
+/*
+ * calculate_fee 仅在首次创建出场操作时调用；未完成操作会直接返回已冻结金额。
+ * 回调在 SQLite 写事务内执行，应快速、无副作用，且不能再次调用本存储对象。
+ */
 int parking_store_check_exit(parking_store_t *store,
                              const char *plate_number,
                              uint64_t requested_at_unix_us,
+                             parking_store_fee_fn calculate_fee,
+                             void *fee_context,
                              parking_store_check_result_t *result);
 
 /* 完成接口可重复调用；同一 operation_id 已提交时仍返回成功。 */
