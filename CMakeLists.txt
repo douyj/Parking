@@ -17,6 +17,80 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 find_package(Threads REQUIRED)
 
+option(PARKING_BUILD_LVGL_TEST
+    "Build the standalone LVGL DRM/KMS display test"
+    OFF
+)
+
+set(PARKING_LVGL_SOURCE_DIR "" CACHE PATH
+    "Optional local LVGL v9.6.0 source directory"
+)
+
+if(PARKING_BUILD_LVGL_TEST)
+    if(CMAKE_VERSION VERSION_LESS 3.14)
+        message(FATAL_ERROR
+            "PARKING_BUILD_LVGL_TEST requires CMake 3.14 or newer")
+    endif()
+
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+    if(CMAKE_CROSSCOMPILING AND DEFINED RK3576_SDK_ROOT)
+        set(_parking_libdrm_package_dir
+            "${RK3576_SDK_ROOT}/ubuntu22.04/packages/arm64/libdrm")
+        set(PARKING_LIBDRM_DEV_DEB
+            "${_parking_libdrm_package_dir}/libdrm-dev_2.4.114-1_arm64.deb"
+            CACHE FILEPATH "ARM64 libdrm development package")
+        set(PARKING_LIBDRM_RUNTIME_DEB
+            "${_parking_libdrm_package_dir}/libdrm2_2.4.114-1_arm64.deb"
+            CACHE FILEPATH "ARM64 libdrm runtime package")
+        unset(_parking_libdrm_package_dir)
+    endif()
+
+    include(FetchContent)
+    set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps"
+        CACHE PATH "Downloaded dependency directory" FORCE)
+
+    if(PARKING_LVGL_SOURCE_DIR)
+        FetchContent_Declare(lvgl SOURCE_DIR "${PARKING_LVGL_SOURCE_DIR}")
+    else()
+        FetchContent_Declare(lvgl
+            GIT_REPOSITORY https://github.com/lvgl/lvgl.git
+            GIT_TAG v9.6.0
+            GIT_SHALLOW TRUE
+            GIT_PROGRESS TRUE
+        )
+    endif()
+
+    set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lv_conf.h"
+        CACHE FILEPATH "LVGL configuration" FORCE)
+    set(LV_BUILD_SET_CONFIG_OPTS OFF CACHE BOOL "" FORCE)
+    set(LV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(LV_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
+    set(LV_FETCH_DEPENDENCIES OFF CACHE BOOL "" FORCE)
+    set(LV_USE_FIND_PACKAGE_LIBDRM ON CACHE BOOL "" FORCE)
+    set(LV_USE_PKG_CONFIG_LIBDRM OFF CACHE BOOL "" FORCE)
+    set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
+    set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(CONFIG_LV_USE_THORVG OFF CACHE BOOL "" FORCE)
+    set(CONFIG_LV_USE_LINUX_DRM ON CACHE BOOL "" FORCE)
+    set(CONFIG_LV_USE_LINUX_DRM_GBM_BUFFERS OFF CACHE BOOL "" FORCE)
+    set(CONFIG_LV_LINUX_DRM_USE_EGL OFF CACHE BOOL "" FORCE)
+
+    FetchContent_MakeAvailable(lvgl)
+
+    execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            -DLVGL_SOURCE_DIR=${lvgl_SOURCE_DIR}
+            -DLVGL_DRM_PATCH=${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/lvgl-v9.6.0-drm-zpos.patch
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyLvglDrmPatch.cmake
+        RESULT_VARIABLE _parking_lvgl_patch_result
+    )
+    if(NOT _parking_lvgl_patch_result EQUAL 0)
+        message(FATAL_ERROR "Failed to apply the LVGL DRM plane zpos patch")
+    endif()
+    unset(_parking_lvgl_patch_result)
+endif()
+
 # 导入项目自带的 RKNN Runtime
 add_library(rknnrt SHARED IMPORTED)
 
@@ -130,6 +204,51 @@ target_link_libraries(parking
         parking_business_lib
         parking_storage_lib
 )
+
+if(PARKING_BUILD_LVGL_TEST)
+    add_library(parking_lvgl_demo_lib STATIC
+        src/ui/parking_lvgl_demo.c
+    )
+
+    target_include_directories(parking_lvgl_demo_lib
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+
+    target_link_libraries(parking_lvgl_demo_lib
+        PUBLIC
+            lvgl::lvgl
+    )
+
+    target_compile_options(parking_lvgl_demo_lib
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Werror
+    )
+
+    add_executable(test_lvgl_display
+        tests/test_lvgl_display.c
+    )
+
+    target_link_libraries(test_lvgl_display
+        PRIVATE
+            parking_lvgl_demo_lib
+    )
+
+    target_compile_options(test_lvgl_display
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Werror
+    )
+
+    set_target_properties(test_lvgl_display PROPERTIES
+        SKIP_BUILD_RPATH TRUE
+    )
+endif()
 
 # 纯 C 车牌业务入口策略测试（不访问摄像头、NPU、Display 或 Gate）
 add_executable(test_parking_plate_policy

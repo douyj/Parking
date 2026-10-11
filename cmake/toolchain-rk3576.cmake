@@ -5,8 +5,14 @@ set(CMAKE_SYSTEM_PROCESSOR aarch64)
 # 使用 LubanCat SDK 自带的工具链和 sysroot。
 # 不要使用宿主 Ubuntu 的 /usr/bin/aarch64-linux-gnu-*，否则会链接
 # 宿主机的新版 glibc，产物无法在板端的旧版 glibc 上运行。
+set(RK3576_SDK_ROOT
+    /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729
+    CACHE PATH
+    "LubanCat RK3576 SDK root"
+)
+
 set(RK3576_TOOLCHAIN_ROOT
-    /home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu
+    ${RK3576_SDK_ROOT}/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu
     CACHE PATH
     "LubanCat RK3576 cross toolchain root"
 )
