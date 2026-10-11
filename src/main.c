@@ -1,4 +1,5 @@
 #include "display.h"
+#include "gate.h"
 #include "log.h"
 #include "parking_controller.h"
 #include "parking_fee.h"
@@ -26,6 +27,14 @@
 #define FONT_PATH               "fonts/platech.ttf"
 #define DEFAULT_DATABASE_PATH   "parking.db"
 
+#define GATE_PWMCHIP_PATH       "/sys/class/pwm/pwmchip2"
+#define GATE_PWM_CHANNEL        0U
+#define GATE_PERIOD_NS          20000000ULL
+#define GATE_OPEN_PULSE_NS      2400000ULL
+#define GATE_CLOSE_PULSE_NS     1400000ULL
+#define GATE_MOVEMENT_TIME_MS   800U
+#define GATE_HOLD_AFTER_MOVE    0
+
 #define PIPELINE_WAIT_MS        100U
 #define ERROR_MESSAGE_CAPACITY  256U
 #define DEMO_MAX_DISPATCH_DEPTH 8U
@@ -34,6 +43,9 @@ typedef struct {
     parking_controller_t *controller;
     parking_fee_t *fee;
     parking_store_t *store;
+    gate_t *gate;
+    gate_state_t observed_gate_state;
+    int enable_gate;
 } parking_demo_t;
 
 static volatile sig_atomic_t running = 1;
@@ -70,21 +82,27 @@ static const char *lane_mode_name(parking_lane_mode_t mode)
 static void print_usage(const char *program)
 {
     fprintf(stderr,
-            "用法: %s [--lane-mode entry|exit] [--database PATH]\n",
+            "用法: %s [--lane-mode entry|exit] [--database PATH] "
+            "[--enable-gate]\n"
+            "  默认模式       Gate 为 DRY-RUN\n"
+            "  --enable-gate  直接驱动真实 Gate，不进行交互确认\n",
             program != NULL ? program : "parking");
 }
 
 static int parse_arguments(int argc, char **argv,
                            parking_lane_mode_t *mode,
-                           const char **database_path)
+                           const char **database_path,
+                           int *enable_gate)
 {
     int i;
 
-    if (argv == NULL || mode == NULL || database_path == NULL)
+    if (argv == NULL || mode == NULL || database_path == NULL ||
+        enable_gate == NULL)
         return -1;
 
     *mode = PARKING_LANE_ENTRY;
     *database_path = DEFAULT_DATABASE_PATH;
+    *enable_gate = 0;
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
@@ -119,11 +137,64 @@ static int parse_arguments(int argc, char **argv,
             continue;
         }
 
+        if (strcmp(argv[i], "--enable-gate") == 0) {
+            *enable_gate = 1;
+            continue;
+        }
+
         print_usage(argv[0]);
         return -1;
     }
 
     return 0;
+}
+
+static const char *gate_state_name(gate_state_t state)
+{
+    switch (state) {
+        case GATE_STATE_CLOSED:
+            return "CLOSED";
+        case GATE_STATE_OPENING:
+            return "OPENING";
+        case GATE_STATE_OPEN:
+            return "OPEN";
+        case GATE_STATE_CLOSING:
+            return "CLOSING";
+        case GATE_STATE_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static gate_t *create_real_gate(void)
+{
+    gate_config_t config;
+    gate_t *gate;
+
+    memset(&config, 0, sizeof(config));
+    config.pwmchip_path = GATE_PWMCHIP_PATH;
+    config.channel = GATE_PWM_CHANNEL;
+    config.period_ns = GATE_PERIOD_NS;
+    config.open_pulse_ns = GATE_OPEN_PULSE_NS;
+    config.close_pulse_ns = GATE_CLOSE_PULSE_NS;
+    config.movement_time_ms = GATE_MOVEMENT_TIME_MS;
+    config.hold_after_move = GATE_HOLD_AFTER_MOVE;
+
+    LOG_WARN("真实 Gate 已启用；创建时将立即执行关闸，"
+             "当前系统没有限位、地感或防砸反馈");
+    LOG_INFO("Gate 配置: %s/pwm%u, period=%" PRIu64
+             " ns, open=%" PRIu64 " ns, close=%" PRIu64
+             " ns, movement=%u ms",
+             config.pwmchip_path, config.channel, config.period_ns,
+             config.open_pulse_ns, config.close_pulse_ns,
+             config.movement_time_ms);
+
+    gate = gate_create(&config);
+    if (gate == NULL)
+        LOG_ERROR("创建真实 Gate 失败");
+
+    return gate;
 }
 
 // 信号处理函数，处理ctrl+c信号，kill等信号，退出程序
@@ -153,6 +224,57 @@ static int install_signal_handlers(void)
 static int dispatch_demo_event(parking_demo_t *demo,
                                const parking_event_t *event,
                                unsigned int depth);
+
+static int update_real_gate(parking_demo_t *demo)
+{
+    parking_event_t event;
+    gate_state_t state;
+    uint64_t now_us;
+    int update_result;
+
+    if (demo == NULL)
+        return -1;
+    if (!demo->enable_gate)
+        return 0;
+    if (demo->gate == NULL)
+        return -1;
+
+    update_result = gate_update(demo->gate);
+    state = gate_get_state(demo->gate);
+    if (update_result != GATE_OK || state == GATE_STATE_ERROR) {
+        LOG_ERROR("更新真实 Gate 失败: %s", gate_last_error(demo->gate));
+        if (monotonic_us(&now_us) != 0)
+            return -1;
+
+        memset(&event, 0, sizeof(event));
+        event.type = PARKING_EVENT_GATE_FAILED;
+        event.occurred_at_us = now_us;
+        event.data.failure.reason = PARKING_REASON_GATE_FAILURE;
+        demo->observed_gate_state = GATE_STATE_ERROR;
+        return dispatch_demo_event(demo, &event, 0);
+    }
+
+    if (state == demo->observed_gate_state)
+        return 0;
+
+    LOG_INFO("真实 Gate 状态: %s -> %s",
+             gate_state_name(demo->observed_gate_state),
+             gate_state_name(state));
+    demo->observed_gate_state = state;
+
+    if (state != GATE_STATE_OPEN && state != GATE_STATE_CLOSED)
+        return 0;
+
+    if (monotonic_us(&now_us) != 0)
+        return -1;
+
+    memset(&event, 0, sizeof(event));
+    event.type = state == GATE_STATE_OPEN
+        ? PARKING_EVENT_GATE_OPENED
+        : PARKING_EVENT_GATE_CLOSED;
+    event.occurred_at_us = now_us;
+    return dispatch_demo_event(demo, &event, 0);
+}
 
 static void log_store_error(parking_demo_t *demo, const char *operation)
 {
@@ -301,16 +423,53 @@ static int execute_demo_commands(parking_demo_t *demo,
                 break;
 
             case PARKING_COMMAND_OPEN_GATE:
-                LOG_INFO("[DRY-RUN] 请求开闸: %s", command->plate_number);
-                response.type = PARKING_EVENT_GATE_OPENED;
+                if (!demo->enable_gate) {
+                    LOG_INFO("[DRY-RUN] 请求开闸: %s",
+                             command->plate_number);
+                    response.type = PARKING_EVENT_GATE_OPENED;
+                    break;
+                }
+
+                if (gate_open(demo->gate) != GATE_OK) {
+                    LOG_ERROR("真实 Gate 开闸失败: %s",
+                              gate_last_error(demo->gate));
+                    response.type = PARKING_EVENT_GATE_FAILED;
+                    response.data.failure.reason =
+                        PARKING_REASON_GATE_FAILURE;
+                    break;
+                }
+
+                demo->observed_gate_state = gate_get_state(demo->gate);
+                LOG_INFO("真实 Gate 开始开闸: %s",
+                         command->plate_number);
+                has_response = 0;
                 break;
 
             case PARKING_COMMAND_CLOSE_GATE:
-                LOG_INFO("[DRY-RUN] 请求关闸: %s, 通行来源=%s",
+                if (!demo->enable_gate) {
+                    LOG_INFO("[DRY-RUN] 请求关闸: %s, 通行来源=%s",
+                             command->plate_number,
+                             parking_controller_passage_source_name(
+                                 command->passage_source));
+                    response.type = PARKING_EVENT_GATE_CLOSED;
+                    break;
+                }
+
+                if (gate_close(demo->gate) != GATE_OK) {
+                    LOG_ERROR("真实 Gate 关闸失败: %s",
+                              gate_last_error(demo->gate));
+                    response.type = PARKING_EVENT_GATE_FAILED;
+                    response.data.failure.reason =
+                        PARKING_REASON_GATE_FAILURE;
+                    break;
+                }
+
+                demo->observed_gate_state = gate_get_state(demo->gate);
+                LOG_INFO("真实 Gate 开始关闸: %s, 通行来源=%s",
                          command->plate_number,
                          parking_controller_passage_source_name(
                              command->passage_source));
-                response.type = PARKING_EVENT_GATE_CLOSED;
+                has_response = 0;
                 break;
 
             case PARKING_COMMAND_COMPLETE_ENTRY:
@@ -485,6 +644,9 @@ static int run_loop(plate_pipeline_t *pipeline, display_t *display,
         display_frame_t display_frame;
         int result;
 
+        if (update_real_gate(demo) != 0)
+            return -1;
+
         if (process_plate_events(pipeline, demo) != 0)
             return -1;
 
@@ -538,13 +700,15 @@ int main(int argc, char **argv)
     parking_fee_t *fee = NULL;
     parking_store_t *store = NULL;
     display_t *display = NULL;
+    gate_t *gate = NULL;
     parking_lane_mode_t lane_mode;
     const char *database_path;
+    int enable_gate;
     int argument_result;
     int exit_code = 1;
 
     argument_result = parse_arguments(argc, argv, &lane_mode,
-                                      &database_path);
+                                      &database_path, &enable_gate);
     if (argument_result > 0)
         return 0;
     if (argument_result < 0)
@@ -556,7 +720,7 @@ int main(int argc, char **argv)
 
     memset(&controller_config, 0, sizeof(controller_config));
     controller_config.mode = lane_mode;
-    controller_config.gate_initially_closed = 1;
+    controller_config.gate_initially_closed = enable_gate ? 0 : 1;
 
     controller = parking_controller_create(&controller_config);
     if (controller == NULL)
@@ -595,6 +759,7 @@ int main(int argc, char **argv)
     demo.controller = controller;
     demo.fee = fee;
     demo.store = store;
+    demo.enable_gate = enable_gate;
 
     memset(&display_config, 0, sizeof(display_config));
     display_config.device = FRAMEBUFFER_DEVICE;
@@ -628,16 +793,25 @@ int main(int argc, char **argv)
     if (pipeline == NULL)
         goto cleanup;
 
+    if (enable_gate) {
+        gate = create_real_gate();
+        if (gate == NULL)
+            goto cleanup;
+        demo.gate = gate;
+        demo.observed_gate_state = gate_get_state(gate);
+    }
+
     if (plate_pipeline_start(pipeline) != PLATE_PIPELINE_OK)
         goto cleanup;
 
     LOG_INFO("Parking 主程序启动，车道模式=%s，SQLite=%s，"
              "可用车位=%u/%u，未完成入场=%u，"
-             "支付与 Gate 为 DRY-RUN，按 Ctrl+C 退出",
+             "支付=DRY-RUN，Gate=%s，按 Ctrl+C 退出",
              lane_mode_name(lane_mode), database_path,
              store_status.available_spaces,
              store_status.total_spaces,
-             store_status.pending_entry_operations);
+             store_status.pending_entry_operations,
+             enable_gate ? "REAL" : "DRY-RUN");
 
     if (run_loop(pipeline, display, &demo) == 0)
         exit_code = 0;
@@ -649,6 +823,7 @@ cleanup:
     parking_fee_destroy(fee);
     parking_controller_destroy(controller);
     display_destroy(display);
+    gate_destroy(gate);
 
     return exit_code;
 }

@@ -1,6 +1,6 @@
 # Parking 项目交接文档
 
-> 最后更新：2026-09-21（Asia/Shanghai）
+> 最后更新：2026-10-11（Asia/Shanghai）
 >
 > 新会话第一步：完整阅读本文，然后执行 `git status --short`。
 >
@@ -55,8 +55,15 @@ USB/V4L2 摄像头
 22. SQLite 出场检查已改为读取活动会话的真实入场时间并调用计费模块；首次计算金额随 `PENDING` 出场事件持久化，重复检查、规则变化和进程重启均复用冻结金额。
 23. `test_parking_fee` 和扩展后的 `test_parking_store` 已通过宿主严格告警、ASan/UBSan 测试及 RK3576 全量交叉编译。
 24. 2026-09-21 用户确认新的计费测试、SQLite 存储测试以及同一数据库的入场、重启、出场计费链路均已在 RK3576 板端测试成功；未提供完整日志或新增性能数据。
+25. 正式 `parking` 主程序已接入可选真实 Gate：默认仍为 dry-run，传入 `--enable-gate` 后直接初始化 PWM，不再要求输入 `ENABLE`；开关闸命令通过 `gate_update()` 异步确认 `OPEN/CLOSED` 后再推进状态机，真实关闸完成后才提交 SQLite。该版本已通过严格告警检查和 RK3576 交叉编译；2026-09-22 用户确认已在 RK3576 板端测试完成，能够通过正式主程序真实控制 Gate，但未提供完整日志或逐项异常路径结果。
+26. 用户把 `PARKING_DEFAULT_PASSAGE_TIMEOUT_US` 从 10 秒改为 5 秒并完成重新交叉编译；正式主程序现在连续 5 秒无有效车牌后请求关闸。独立的 `test_realtime_plate_gate` 仍使用自己的 10 秒常量。
+27. 2026-10-11 重新执行了车牌策略、整数计费和 SQLite 存储的宿主 `-Wall -Wextra -Wpedantic -Werror`、ASan/UBSan 回归，全部通过；正式 `parking` 及三个纯 C 测试也已重新完成 RK3576 交叉编译。该自动回归不等于真实 Gate 的免费出场、收费出场或异常拒绝板端验证。
+28. 2026-10-11 用户提供正式主程序完整板端日志：车牌 `浙A66666` 入场检查通过后真实开闸，连续约 5 秒无有效车牌后以 `VISION_TIMEOUT` 真实关闸，并在 `CLOSED` 后提交 SQLite 入场；随后使用同一数据库免费出场，费用为 0 分、跳过支付、真实开关闸，并在关闸完成后提交 SQLite 出场。入口与免费出场真实 Gate 链路已验证成功。
+29. 2026-10-11 用户在板端安装了 `sqlite3` 和 `libsqlite3-dev`，收费出场回归改为只在专用测试数据库中用 `sqlite3` 调整活动会话入场时间；不再保留额外的数据库辅助程序。
+30. 2026-10-11 用户提供收费出场完整板端日志：专用测试数据库中的活动会话调整为约 31.1 分钟后，正式主程序计算费用为 50 分，执行模拟支付，随后真实开闸；连续约 5 秒无有效车牌后真实关闸，并在 `CLOSED` 后提交 SQLite 出场。收费出场真实 Gate 链路已验证成功。
+31. 2026-10-11 用户再次以出口模式识别已经完成出场的 `浙A66666`，SQLite 返回 `NO_ACTIVE_SESSION`，程序只记录业务拒绝，没有发出真实 Gate 开闸命令，也没有错误提交出场。异常拒绝不开闸已完成板端验证。
 
-当前没有已知编译卡点。下一步建议把已经在受控测试中验证的 Gate 安全接入正式 `parking` 主程序：默认继续 dry-run，只允许通过明确参数和人工确认启用真实 PWM；不要继续重写已经通过真机验证的 Camera、Recognizer、计费、SQLite 和管线线程逻辑。
+当前没有已知编译卡点。正式主程序入口、免费出场、收费出场和异常拒绝不开闸已经板端成功；下一步进入 LVGL UI。不要继续重写已经通过真机验证的 Camera、Recognizer、Gate、计费、SQLite 和管线线程逻辑。
 
 ## 2. 当前结论速览
 
@@ -79,7 +86,11 @@ plate_confirmation                           已抽取并真机验证
 连续 10 秒无有效车牌 -> 自动关闸              已验证成功
 src/main.c 正式管线与 Display 集成            已完成并在 RK3576 板端验证
 parking 稳定车牌事件日志                      已在 RK3576 板端验证
-parking 正式 Gate 集成                        尚未开始
+parking 正式 Gate 集成                        已完成并在 RK3576 板端验证真实控制
+parking 真实 Gate 入场链路                    已完成 RK3576 板端验证
+parking 真实 Gate 免费出场链路                已完成 RK3576 板端验证
+parking 真实 Gate 收费出场链路                已完成 RK3576 板端验证
+parking 异常拒绝不开闸                        已完成 RK3576 板端验证
 稳定事件有界 FIFO                             已实现、交叉编译并完成板端正常路径验证
 parking_controller + main dry-run              已完成入口/出口板端业务回归
 parking_plate_policy                           已完成宿主与 RK3576 板端回归
@@ -97,7 +108,7 @@ MQTT、正式支付、OTA                            尚未实现
 
 2026-09-15 正式主程序板端日志确认 LCD 为 `1024x600`、Camera 为 `/dev/video0` 的 `1280x720@30`，并输出了多个稳定车牌事件。日志中出现过 `粤A3333G`、`粤A3333` 等相近字符串；不能仅凭日志断言它们来自同一块实体车牌。当前业务策略会把 6 字符的 `粤A3333` 判为 `INVALID_PLATE`，把业务进行中与活动车牌只差 1 个 UTF-8 字符的合法车牌判为 `AMBIGUOUS_PLATE`，不会自动改写或合并后写入停车记录。
 
-Gate 仍无物理限位、地感、防砸或车辆通过信号。当前自动关闸只依据“连续 10 秒没有识别到有效车牌”的软件计时，因此不能把当前原型当成可无人看守运行的安全系统。
+Gate 仍无物理限位、地感、防砸或车辆通过信号。正式主程序当前自动关闸只依据“连续 5 秒没有识别到有效车牌”的软件计时（独立 Gate 测试仍为 10 秒），因此不能把当前原型当成可无人看守运行的安全系统。
 
 用户观察到连续 RKNN 推理时芯片很烫。当前识别线程无限速，一帧完成后立即处理最新帧；最新帧槽只防止积压，不降低 NPU 占用。用户明确决定暂不限速，等整个项目完成后再处理；未经请求不要擅自加入 sleep 或改变识别频率。
 
@@ -335,13 +346,15 @@ parking_controller 状态机驱动
 --database PATH（默认 parking.db）
 SQLite 入/出场检查和完成提交
 按真实入场/出场时间计算费用并冻结待付金额
-模拟支付与 Gate 状态
+模拟支付；Gate 默认 dry-run，可用 --enable-gate 启用真实 PWM
 绘制帧获取与 pipeline_frame_release
 ```
 
-`parking` 链接 `plate_pipeline_lib`、`parking_business_lib` 和 `parking_storage_lib`，并通过前者自动获得 `parking_lib`、`plate_recognizer_lib` 和 `Threads::Threads` 依赖。主程序不直接访问 Camera、Recognizer 或管线内部线程。入/出场检查、持久化 operation ID、停车会话提交和聚合车位统计已经使用 SQLite 事务；出口按停车时长计费，首次出场检查后冻结金额。支付与 Gate 仍为日志/dry-run，尚未接入正式 Gate、正式支付、LVGL、MQTT 或 OTA。
+`parking` 链接 `plate_pipeline_lib`、`parking_business_lib` 和 `parking_storage_lib`，并通过前者自动获得 `parking_lib`、`plate_recognizer_lib` 和 `Threads::Threads` 依赖。主程序不直接访问 Camera、Recognizer 或管线内部线程。入/出场检查、持久化 operation ID、停车会话提交和聚合车位统计已经使用 SQLite 事务；出口按停车时长计费，首次出场检查后冻结金额。支付仍为日志/dry-run；Gate 默认 dry-run，传入 `--enable-gate` 后直接使用已验证的 `pwmchip2/pwm0` 参数，不进行 `ENABLE` 交互确认。2026-09-22 用户确认正式主程序已在板端成功真实控制 Gate；正式支付、LVGL、MQTT 和 OTA 尚未接入。
 
-数据库时间使用 `CLOCK_REALTIME` 的 Unix epoch 微秒，状态机超时仍使用 `CLOCK_MONOTONIC`；不能把两种时间直接混用。入场检查会创建持久化 `PENDING` 操作并预留容量，连续 10 秒无有效车牌、模拟关闸后才提交正式在场会话；出场完成后才关闭会话并释放车位。同一车牌的未完成操作在进程重启后会返回原 `operation_id`，完成接口可重复调用。
+真实 Gate 模式下，`gate_create()` 会立即开始关闸，控制器先保持 `INITIALIZING`；主循环持续调用 `gate_update()`，只有观测到真实 `CLOSED` 后才进入 `IDLE`。业务开关闸命令不会立即伪造完成事件，只有实际状态到达 `OPEN/CLOSED` 后才向 `parking_controller` 回报；因此 SQLite 完成提交发生在真实关闸完成之后。Gate 更新或命令失败会发送 `PARKING_EVENT_GATE_FAILED` 并让业务进入错误路径。
+
+数据库时间使用 `CLOCK_REALTIME` 的 Unix epoch 微秒，状态机超时仍使用 `CLOCK_MONOTONIC`；不能把两种时间直接混用。入场检查会创建持久化 `PENDING` 操作并预留容量，正式主程序连续 5 秒无有效车牌、关闸完成后才提交正式在场会话；出场完成后才关闭会话并释放车位。同一车牌的未完成操作在进程重启后会返回原 `operation_id`，完成接口可重复调用。
 
 开发过程中曾出现屏幕无画面，根因是 `src/main.c` 中：
 
@@ -516,6 +529,7 @@ cmake --build build-rk3576-release \
 cmake --build build-rk3576-release \
   --target test_parking_store \
   -j"$(nproc)"
+
 ```
 
 截至 2026-09-21 已完成：
@@ -575,37 +589,28 @@ test_parking_store
 
 ```text
 branch: feature/status
-HEAD:   390aa44 “数据库模块添加”
+HEAD:   5235b04 “费用接入数据库”
 ```
 
 写入本文后预期工作树：
 
 ```text
  M HANDOFF.md
- M CMakeLists.txt
- M include/parking_store.h
+ M include/parking_controller.h
  M src/main.c
- M src/storage/parking_store.c
- M tests/test_parking_store.c
-?? include/parking_fee.h
-?? src/business/parking_fee.c
-?? tests/test_parking_fee.c
+?? AGENTS.md
 ```
 
 具体含义：
 
-- `include/parking_fee.h`、`src/business/parking_fee.c`：新增独立整数计费模块和可配置收费规则；
-- `tests/test_parking_fee.c`：新增不依赖硬件或数据库的纯 C 计费单元测试；
-- `include/parking_store.h`、`src/storage/parking_store.c`：出场检查接入计费回调，读取入场时间并持久化冻结金额；
-- `tests/test_parking_store.c`：扩展 SQLite 集成测试，覆盖计费边界、重复请求、规则变化和重启恢复；
-- `src/main.c`：创建/销毁计费器并接到 SQLite 出场检查，免费车辆跳过支付，非零费用继续模拟支付；
-- `CMakeLists.txt`：将计费实现加入业务库，新增 `test_parking_fee`，并让存储测试链接计费实现；
-- `HANDOFF.md`：本交接更新。
+- `src/main.c`：正式主程序接入可选真实 Gate；`--enable-gate` 直接启用 PWM，不要求输入 `ENABLE`，并按真实异步状态推进业务；
+- `include/parking_controller.h`：把正式状态机默认视觉通行超时从 10 秒调整为 5 秒；
+- `HANDOFF.md`：记录正式 Gate 接入、验证边界和新的板端回归步骤。
+- `AGENTS.md`：用户新增的项目 C 代码排版与注释约定；必须保留并遵守。
 
-`390aa44` 已经提交了上一版 SQLite 存储模块及正式主程序集成；不要把这些已提交内容误判为缺失。
+`5235b04` 已经提交了计费模块、SQLite 金额冻结及对应测试；不要把这些已提交内容误判为缺失。
+`390aa44` 已经提交了上一版 SQLite 存储模块及正式主程序集成。
 `ae032da` 已经提交了稳定事件 FIFO 及管线集成；不要把它误写成当前未提交改动。
-
-普通 `git diff` 不会显示当前未跟踪的计费文件内容，必须直接阅读，不能误判为不存在或无修改。
 
 以上全部是用户资产。不要 reset、checkout、clean、恢复旧版或删除未跟踪文件。不要擅自提交；如需 commit，应先让用户确认提交范围和提交信息。
 
@@ -645,7 +650,7 @@ sed -n '1,760p' src/business/parking_controller.c
 sed -n '1,360p' src/business/parking_plate_policy.c
 sed -n '1,360p' src/business/parking_fee.c
 sed -n '1,1200p' src/storage/parking_store.c
-sed -n '1,700p' src/main.c
+sed -n '1,900p' src/main.c
 sed -n '1,260p' CMakeLists.txt
 ```
 
@@ -658,7 +663,7 @@ sed -n '1,260p' CMakeLists.txt
 3. SQLite schema v1、事务、停车记录、聚合车位统计、按时长计费和正式主程序集成已经完成板端正常链路验证，但尚未专门验证断电瞬间恢复、数据库损坏、磁盘写满或 SQLite 锁竞争等故障路径；
 4. 计费模块已经实现，但规则目前只在进程启动时使用默认值，尚无配置文件、后台下发或管理界面；支付仍是 dry-run。`parking_spaces` 当前只有全场总数/占用数，不是具体 A01/A02 车位分配；
 5. SQLite 未完成 operation 会跨重启保留并在同一车牌再次检查时复用，不会擅自推断车辆是否已经通过；当前尚无人工列出/取消长期遗留 operation 的管理接口，因此启动日志会显示未完成入场数量；
-6. 正式 `parking` 主程序尚未接入 Gate；真实 Gate 仍只在受控测试中使用；
+6. 正式 `parking` 主程序入口、免费出场、收费出场和异常拒绝不开闸已提供完整板端日志并验证成功；Gate 故障路径尚未逐项验证；
 7. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
 8. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
 9. 管线对象 stop 后不能再次 start；
@@ -709,9 +714,9 @@ REJECT_COOLDOWN
 ERROR
 ```
 
-控制器接收稳定车牌、业务检查结果、支付结果、Gate 状态、车辆通过、提交结果和复位事件，输出检查入/出场、请求支付、开/关闸、完成入/出场、拒绝和报告错误等命令。`parking_controller_tick()` 使用单调时钟处理检查、支付、Gate、通行、提交和拒绝冷却超时；`WAIT_PASSAGE` 会结合 `plate_pipeline_last_plate_seen_us()`，连续默认 10 秒没有看到车牌后输出关闸命令，并把来源标为 `PARKING_PASSAGE_VISION_TIMEOUT`。
+控制器接收稳定车牌、业务检查结果、支付结果、Gate 状态、车辆通过、提交结果和复位事件，输出检查入/出场、请求支付、开/关闸、完成入/出场、拒绝和报告错误等命令。`parking_controller_tick()` 使用单调时钟处理检查、支付、Gate、通行、提交和拒绝冷却超时；`WAIT_PASSAGE` 会结合 `plate_pipeline_last_plate_seen_us()`，连续默认 5 秒没有看到车牌后输出关闸命令，并把来源标为 `PARKING_PASSAGE_VISION_TIMEOUT`。
 
-状态机核心已加入独立 `parking_business_lib`，通过宿主严格告警检查、RK3576 严格告警检查和交叉编译。入口和出口全 dry-run 版本已经在板端回归成功。当前正式 `main.c` 继续由主线程取空稳定事件 FIFO 并驱动控制器，但检查和完成提交已经替换为 SQLite 执行器；支付和 Gate 仍立即模拟成功，不访问 PWM。
+状态机核心已加入独立 `parking_business_lib`，通过宿主严格告警检查、RK3576 严格告警检查和交叉编译。入口和出口全 dry-run 版本已经在板端回归成功。当前正式 `main.c` 继续由主线程取空稳定事件 FIFO 并驱动控制器，检查和完成提交使用 SQLite 执行器；支付仍立即模拟成功，Gate 默认模拟，但 `--enable-gate` 会使用真实 PWM 并等待异步状态完成。
 
 当前 dry-run 链路为：
 
@@ -721,12 +726,12 @@ ERROR
     -> SQLite 入场/出场检查并创建持久化 PENDING operation
     -> 出口模式按入场/出场时间计费，非零费用模拟支付
     -> 模拟 Gate OPENED
-    -> 连续 10 秒没有看到车牌
+    -> 连续 5 秒没有看到车牌
     -> VISION_TIMEOUT + 模拟 Gate CLOSED
     -> SQLite 事务完成入场/出场提交
 ```
 
-此前全 dry-run 链路已在板端成功；2026-09-21 用户又确认当前 SQLite 计费版本的入场、重启和出场链路板端成功。SQLite 检查、冻结金额和提交是真实持久化，支付与 Gate 仍是模拟，不能把模拟支付称为正式支付。
+此前全 dry-run 链路已在板端成功；2026-09-21 用户又确认 SQLite 计费版本的入场、重启和出场链路板端成功。该次验证中的 SQLite 检查、冻结金额和提交是真实持久化，支付与 Gate 是模拟。2026-09-22 用户确认当前可选真实 Gate 已能在板端由正式主程序控制；支付仍为模拟，不能称为正式支付。
 
 ### 9.3 车牌事件策略第一版已实现
 
@@ -807,7 +812,7 @@ parking_fee: all 9 tests passed
 parking_store: all tests passed
 ```
 
-入口模式应看到 SQLite 检查通过、持久化 operation ID、模拟开关闸以及 `SQLite 入场完成`。退出进程后数据库必须保留；出口模式使用同一车牌和同一数据库，应查到活动会话，并按真实停车时长显示 0～2000 分。免费时直接模拟开闸，非零费用先模拟支付，再由 Gate 流程完成并输出 `SQLite 出场完成`。随后再次运行出口模式，同一车牌应被 `NO_ACTIVE_SESSION` 拒绝。该正常链路已由用户确认成功，但没有收到完整日志，不能据此声称异常断电或并发故障路径也已验证。
+入口模式应看到 SQLite 检查通过、持久化 operation ID、模拟开关闸以及 `SQLite 入场完成`。退出进程后数据库必须保留；出口模式使用同一车牌和同一数据库，应查到活动会话，并按真实停车时长显示 0～2000 分。免费时直接模拟开闸，非零费用先模拟支付，再由 Gate 流程完成并输出 `SQLite 出场完成`。随后再次运行出口模式，同一车牌应被 `NO_ACTIVE_SESSION` 拒绝。入口、免费出场和收费出场的真实 Gate 正常链路均已有完整板端日志，但不能据此声称异常断电或并发故障路径也已验证。
 
 ### 9.5 停车计费模块已实现
 
@@ -826,15 +831,13 @@ tests/test_parking_fee.c
 建议顺序：
 
 ```text
-安全接入正式主程序 Gate（默认 dry-run，显式参数 + 人工确认才启用 PWM）
-    -> 板端分别回归入场、免费出场、收费出场和异常拒绝
-    -> LVGL UI
+LVGL UI
     -> MQTT/JSON
     -> 正式支付
     -> OTA
 ```
 
-正式主程序接入 Gate 时，默认必须保持 dry-run。真实 PWM 只能通过明确参数启用并继续要求人工输入 `ENABLE`；不能加入自动测试或默认启动路径。
+正式主程序默认保持 dry-run。根据用户 2026-09-22 的明确要求，真实 PWM 通过 `--enable-gate` 启用后直接运行，不再要求人工输入 `ENABLE`；仍不能加入自动测试或默认启动路径。`test_realtime_plate_gate` 的原有人工确认保持不变。
 
 正式 UI 使用 LVGL；当前 `display.c` 保留为测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
 
@@ -979,10 +982,10 @@ if (result == PLATE_PIPELINE_CLOSED)
 2. 执行 `git status --short`，不清理任何修改；
 3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`include/parking_controller.h`、`src/business/parking_controller.c`、`include/parking_plate_policy.h`、`src/business/parking_plate_policy.c`、`include/parking_fee.h`、`src/business/parking_fee.c`、`include/parking_store.h`、`src/storage/parking_store.c`、`src/main.c` 和 `CMakeLists.txt`；
 4. 阅读两个迁移后的测试，理解 Display 和 Gate 仍属于主线程/业务层；
-5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序、FIFO 正常路径、入口/出口全 dry-run、车牌策略、SQLite v1、按时长计费和同数据库入场—重启—出场链路都已经板端成功；满队列溢出、断电恢复和数据库故障路径尚未专门验证；
+5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序、FIFO 正常路径、入口/出口全 dry-run、车牌策略、SQLite v1、按时长计费和同数据库入场—重启—出场链路都已经板端成功；正式主程序入口、免费出场、收费出场和异常拒绝不开闸也已有完整板端日志并验证成功；满队列溢出、断电恢复和数据库故障路径尚未专门验证；
 6. 不要把 `src/main.c` 恢复成占位程序，也不要重新复制 Camera、Recognizer 或管线线程逻辑；
 7. 不要重新从摄像头、MIPI、RKNN 或 PWM 是否存在开始排查，除非硬件环境发生变化；
-8. 默认下一步是安全接入正式主程序 Gate：默认 dry-run，只有明确参数和人工确认后才能启用真实 PWM，然后分别回归入场、免费出场、收费出场和异常拒绝；
+8. 默认下一步是接入 LVGL UI；正式主程序 Gate 默认 dry-run，`--enable-gate` 直接启用真实 PWM且不要求输入 `ENABLE`；
 9. 修改前说明文件范围；
 10. 不运行真实 Gate 自动测试，不把真实 Gate 默认接入主程序；
 11. 不擅自处理 RKNN 发热或改变推理频率；
