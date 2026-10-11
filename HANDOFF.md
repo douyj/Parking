@@ -62,9 +62,10 @@ USB/V4L2 摄像头
 29. 2026-10-11 用户在板端安装了 `sqlite3` 和 `libsqlite3-dev`，收费出场回归改为只在专用测试数据库中用 `sqlite3` 调整活动会话入场时间；不再保留额外的数据库辅助程序。
 30. 2026-10-11 用户提供收费出场完整板端日志：专用测试数据库中的活动会话调整为约 31.1 分钟后，正式主程序计算费用为 50 分，执行模拟支付，随后真实开闸；连续约 5 秒无有效车牌后真实关闸，并在 `CLOSED` 后提交 SQLite 出场。收费出场真实 Gate 链路已验证成功。
 31. 2026-10-11 用户再次以出口模式识别已经完成出场的 `浙A66666`，SQLite 返回 `NO_ACTIVE_SESSION`，程序只记录业务拒绝，没有发出真实 Gate 开闸命令，也没有错误提交出场。异常拒绝不开闸已完成板端验证。
-32. 第一版独立 LVGL 9.6.0 + DRM/KMS 显示测试已实现：使用 `/dev/dri/card0`、XRGB8888 和 dumb buffer，Tiny-TTF 直接加载现有 `fonts/platech.ttf`；已通过严格告警和 RK3576 交叉编译。2026-10-11 板端首次运行确认 DSI-1、1024x600 和 plane 提交正常，但 LVGL plane 56 的 zpos 0 被 fbcon plane 96 的 zpos 1 覆盖；加入最高 zpos 补丁后，用户确认中文停车界面显示成功。尚未单独确认 Ctrl+C 后 fbcon 恢复。
+32. 第一版独立 LVGL 9.6.0 + DRM/KMS 显示测试已实现：使用 `/dev/dri/card0`、XRGB8888 和 dumb buffer，Tiny-TTF 直接加载现有 `fonts/platech.ttf`；已通过严格告警和 RK3576 交叉编译。2026-10-11 板端首次运行确认 DSI-1、1024x600 和 plane 提交正常，但 LVGL plane 56 的 zpos 0 被 fbcon plane 96 的 zpos 1 覆盖；加入最高 zpos 补丁后，用户确认中文停车界面显示成功，Ctrl+C 后 fbcon 也能恢复。
+33. 正式 `parking_ui` 已实现并接入 `main.c`：在主线程使用 LVGL/DRM 显示 640x360 实时识别画面、入口/出口模式、车位统计、车牌与颜色、置信度、费用、业务状态、Gate 状态和拒绝原因；原 Camera、识别管线、SQLite、计费、Gate 与业务状态机接口未重写。已通过宿主业务回归、严格告警和 RK3576 全量交叉编译，尚待正式主程序板端显示与业务联动验证。
 
-当前没有已知编译卡点。下一步是新增正式 `parking_ui` 模块并接入 `main.c`，先替换 `/dev/fb0` 实时画面显示，再把稳定车牌、车位统计、业务状态、费用和 Gate 状态映射到 UI；不要继续重写已经通过真机验证的 Camera、Recognizer、Gate、计费、SQLite 和管线线程逻辑。
+当前没有已知编译卡点。下一步是在板端运行新的正式 `parking`，先用默认 dry-run 验证实时画面、状态联动、入场/出口和 Ctrl+C 清理；成功前不要启用真实 Gate。不要继续重写已经通过真机验证的 Camera、Recognizer、Gate、计费、SQLite 和管线线程逻辑。
 
 ## 2. 当前结论速览
 
@@ -99,7 +100,7 @@ parking_storage_lib + SQLite schema v1         已完成 RK3576 板端验证
 parking SQLite 检查/提交集成                   已完成 RK3576 板端验证
 parking_fee 按时长计费                         已完成 RK3576 板端验证
 SQLite 首次出场计费与金额冻结                  已完成 RK3576 板端验证
-LVGL / 原生 DRM/KMS                          独立中文界面已完成板端显示验证
+LVGL / 原生 DRM/KMS                          独立测试已真机验证，正式 parking_ui 待板端验证
 MQTT、正式支付、OTA                            尚未实现
 ```
 
@@ -533,7 +534,7 @@ cmake --build build-rk3576-release \
 
 ```
 
-独立 LVGL DRM/KMS 测试使用单独构建目录，默认关闭，不影响正式目标：
+正式 `parking` 现在默认构建并链接 LVGL/DRM；独立显示测试仍通过下面的选项启用：
 
 ```bash
 cmake -S . -B build-rk3576-lvgl \
@@ -607,7 +608,7 @@ test_lvgl_display
 
 ```text
 branch: feature/lvgl
-HEAD:   eede95c “完成业务收费状态测试”
+HEAD:   1bc265a “ui初始化显示成功”
 ```
 
 写入本文后预期工作树：
@@ -615,26 +616,21 @@ HEAD:   eede95c “完成业务收费状态测试”
 ```text
  M HANDOFF.md
  M CMakeLists.txt
- M cmake/toolchain-rk3576.cmake
-?? cmake/ApplyLvglDrmPatch.cmake
-?? cmake/Findlibdrm.cmake
-?? cmake/patches/lvgl-v9.6.0-drm-zpos.patch
-?? include/parking_lvgl_demo.h
-?? lv_conf.h
-?? src/ui/parking_lvgl_demo.c
-?? tests/test_lvgl_display.c
+ M lv_conf.h
+ M src/main.c
+?? include/parking_ui.h
+?? src/ui/parking_ui.c
 ```
 
 具体含义：
 
-- `CMakeLists.txt`、`cmake/toolchain-rk3576.cmake`、`cmake/Findlibdrm.cmake`：可选 LVGL 9.6.0 与 SDK ARM64 libdrm 交叉构建接入；
-- `cmake/ApplyLvglDrmPatch.cmake`、`cmake/patches/lvgl-v9.6.0-drm-zpos.patch`：把 LVGL plane 提升到硬件允许的最高 zpos，避免被 fbcon 全屏 plane 覆盖；
-- `lv_conf.h`：启用 XRGB8888、DRM dumb buffer 和 Tiny-TTF；
-- `include/parking_lvgl_demo.h`、`src/ui/parking_lvgl_demo.c`：第一版静态停车界面和中文字体加载；
-- `tests/test_lvgl_display.c`：独立 DRM/KMS 显示测试，不访问其他硬件；
-- `HANDOFF.md`：记录 LVGL 最小显示闭环的实现和未验证边界。
+- `CMakeLists.txt`、`lv_conf.h`：正式目标默认构建 LVGL/DRM 和 canvas，并链接 `parking_ui_lib`；
+- `include/parking_ui.h`、`src/ui/parking_ui.c`：正式停车 UI、实时 BGR 画面缩放和状态快照呈现；
+- `src/main.c`：移除正式主程序的 `/dev/fb0` 路径，改由主线程驱动 `parking_ui`；
+- `HANDOFF.md`：记录正式 UI 实现、验证结果和板端待验证边界。
 
-`eede95c` 已经提交了正式 Gate、5 秒关闸超时、板端业务回归记录和项目开发约定；不要把这些已提交内容误判为缺失。
+`1bc265a` 已经提交了独立 LVGL/DRM 显示测试、zpos 修复及其构建接入；不要把这些已提交内容误判为缺失。
+`eede95c` 已经提交了正式 Gate、5 秒关闸超时、板端业务回归记录和项目开发约定。
 `5235b04` 已经提交了计费模块、SQLite 金额冻结及对应测试。
 `390aa44` 已经提交了上一版 SQLite 存储模块及正式主程序集成。
 `ae032da` 已经提交了稳定事件 FIFO 及管线集成；不要把它误写成当前未提交改动。
@@ -698,7 +694,7 @@ sed -n '1,260p' CMakeLists.txt
 11. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
 12. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
 13. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
-14. 独立 LVGL DRM/KMS 测试已在板端确认 DSI connector、CRTC、XR24 dumb buffer 和 atomic plane 生效；首次运行选中的 plane 56 为 zpos 0，被 zpos 1 的 fbcon plane 96 完整覆盖。加入最高 zpos 补丁后用户已确认中文停车界面显示成功，但尚未单独确认 Ctrl+C 后 fbcon 恢复，也尚未接入正式主程序；MQTT、正式支付和 OTA 尚未实现。
+14. 独立 LVGL DRM/KMS 测试已完成板端显示和 Ctrl+C 恢复验证；正式 `parking_ui` 已接入主程序并交叉编译，但尚待板端验证实时画面、业务状态联动与清理路径。MQTT、正式支付和 OTA 尚未实现。
 
 ## 9. 下一步计划
 
@@ -865,9 +861,9 @@ src/ui/parking_lvgl_demo.c
 tests/test_lvgl_display.c
 ```
 
-`PARKING_BUILD_LVGL_TEST` 默认关闭，因此普通 `parking` 构建不会下载或编译 LVGL。启用后固定使用 LVGL v9.6.0；DRM 后端使用 XRGB8888 与 dumb buffer，不依赖 GBM/EGL。演示界面通过 Tiny-TTF 从已有 `fonts/platech.ttf` 加载中文字体，显示总车位、已使用、剩余车位、车道、Gate 和最近车辆等静态占位信息。
+正式 `parking` 现在固定使用 LVGL v9.6.0；`PARKING_BUILD_LVGL_TEST` 只控制是否额外构建独立测试。DRM 后端使用 XRGB8888 与 dumb buffer，不依赖 GBM/EGL。演示界面和正式界面都通过 Tiny-TTF 从已有 `fonts/platech.ttf` 加载中文字体。
 
-`test_lvgl_display` 默认打开 `/dev/dri/card0`，connector ID 为 `-1` 自动选择，也支持 `--device`、`--connector` 和 `--font` 参数。它已通过 `-Wall -Wextra -Wpedantic -Werror` 和 RK3576 交叉编译，正式 `parking` 也已重新交叉编译成功。板端已确认 `/dev/dri/card0` 的 DSI-1、1024x600、XR24 dumb buffer 和 plane 提交成功；首次运行的 plane 56 为 zpos 0，被 zpos 1 的 fbcon plane 96 完整覆盖。当前构建会给 LVGL plane 设置可配置的最高 zpos，用户已确认修复后中文停车界面显示成功；尚未单独确认 Ctrl+C 后 fbcon 恢复。
+`test_lvgl_display` 默认打开 `/dev/dri/card0`，connector ID 为 `-1` 自动选择，也支持 `--device`、`--connector` 和 `--font` 参数。板端已确认 `/dev/dri/card0` 的 DSI-1、1024x600、XR24 dumb buffer 和 plane 提交成功；当前最高 zpos 补丁解决了 fbcon 覆盖，用户已确认中文界面显示以及 Ctrl+C 后 fbcon 恢复。
 
 板端运行前必须停止所有会访问 `/dev/fb0` 或 `/dev/dri/card0` 的程序，然后在包含 `fonts/platech.ttf` 的部署目录运行：
 
@@ -875,13 +871,21 @@ tests/test_lvgl_display.c
 ./test_lvgl_display
 ```
 
-### 9.7 后续功能
+### 9.7 正式 parking_ui 已实现
+
+新增 `include/parking_ui.h` 和 `src/ui/parking_ui.c`。模块在主线程拥有 LVGL/DRM 生命周期，通过 `parking_ui_present_bgr()` 把识别管线输出的 BGR888 画面保持比例缩放到 640x360 canvas，通过 `parking_ui_set_status()` 接收业务快照，不直接访问 Camera、SQLite、Gate 或业务状态机。
+
+正式 `main.c` 已移除 `/dev/fb0` 的 `display_t`，改为显示实时识别画面以及入口/出口模式、车位统计、最近车牌与颜色、检测置信度、冻结费用、业务状态、真实/模拟 Gate 状态和拒绝原因。SQLite 检查与完成提交后会同步刷新车位统计；`parking_ui_process()` 与原业务循环在同一主线程运行。
+
+宿主车牌策略、9 组计费测试和 SQLite 存储测试全部通过；`parking_ui.c` 与 `main.c` 已通过 `-Wall -Wextra -Wpedantic -Werror`，正式 `parking` 和原硬件测试已完成 RK3576 交叉编译。正式 UI 尚未板端运行，不能宣称实时画面、状态布局或长期刷新已经真机验证。
+
+### 9.8 后续功能
 
 建议顺序：
 
 ```text
-板端验证独立 LVGL DRM/KMS 显示
-    -> 正式 parking 接入 parking_ui
+独立 LVGL DRM/KMS 显示已验证
+    -> 板端验证正式 parking_ui 实时画面与业务联动
     -> MQTT/JSON
     -> 正式支付
     -> OTA
@@ -891,7 +895,7 @@ tests/test_lvgl_display.c
 
 正式 UI 使用 LVGL；当前 `display.c` 保留为测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
 
-### 9.8 最后再处理性能与散热
+### 9.9 最后再处理性能与散热
 
 整个业务完成后，再考虑 `recognition_interval_ms`、温度监测、NPU 占用和散热优化。不能在没有用户新指示时改变当前无限速推理和 3 帧确认的响应特性。
 
@@ -1035,7 +1039,7 @@ if (result == PLATE_PIPELINE_CLOSED)
 5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序、FIFO 正常路径、入口/出口全 dry-run、车牌策略、SQLite v1、按时长计费和同数据库入场—重启—出场链路都已经板端成功；正式主程序入口、免费出场、收费出场和异常拒绝不开闸也已有完整板端日志并验证成功；满队列溢出、断电恢复和数据库故障路径尚未专门验证；
 6. 不要把 `src/main.c` 恢复成占位程序，也不要重新复制 Camera、Recognizer 或管线线程逻辑；
 7. 不要重新从摄像头、MIPI、RKNN 或 PWM 是否存在开始排查，除非硬件环境发生变化；
-8. 默认下一步是把已通过板端显示验证的 LVGL 接入正式 `parking_ui` 和主程序；正式主程序 Gate 默认 dry-run，`--enable-gate` 直接启用真实 PWM且不要求输入 `ENABLE`；
+8. 默认下一步是板端验证正式 `parking_ui`，先保持 Gate dry-run；通过后再由用户决定是否回归 `--enable-gate` 真实 PWM；
 9. 修改前说明文件范围；
 10. 不运行真实 Gate 自动测试，不把真实 Gate 默认接入主程序；
 11. 不擅自处理 RKNN 发热或改变推理频率；

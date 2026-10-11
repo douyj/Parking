@@ -1,9 +1,9 @@
-#include "display.h"
 #include "gate.h"
 #include "log.h"
 #include "parking_controller.h"
 #include "parking_fee.h"
 #include "parking_store.h"
+#include "parking_ui.h"
 #include "plate_pipeline.h"
 
 #include <errno.h>
@@ -16,7 +16,7 @@
 #include <time.h>
 
 #define CAMERA_DEVICE           "/dev/video0"
-#define FRAMEBUFFER_DEVICE      "/dev/fb0"
+#define DRM_DEVICE              "/dev/dri/card0"
 
 #define CAMERA_WIDTH            1280U
 #define CAMERA_HEIGHT           720U
@@ -43,8 +43,15 @@ typedef struct {
     parking_controller_t *controller;
     parking_fee_t *fee;
     parking_store_t *store;
+    parking_ui_t *ui;
     gate_t *gate;
     gate_state_t observed_gate_state;
+    parking_store_status_t store_status;
+    parking_reason_t ui_reason;
+    char last_plate[PARKING_PLATE_CAPACITY];
+    char last_plate_color[32];
+    float last_confidence;
+    uint64_t amount_cents;
     int enable_gate;
 } parking_demo_t;
 
@@ -288,6 +295,68 @@ static void log_store_error(parking_demo_t *demo, const char *operation)
               error[0] != '\0' ? error : "未知 SQLite 错误");
 }
 
+static void copy_check_status(parking_demo_t *demo,
+                              const parking_store_check_result_t *result)
+{
+    demo->store_status.total_spaces = result->total_spaces;
+    demo->store_status.occupied_spaces = result->occupied_spaces;
+    demo->store_status.pending_entry_operations =
+        result->pending_entry_operations;
+    demo->store_status.available_spaces = result->available_spaces;
+}
+
+static int refresh_store_status(parking_demo_t *demo)
+{
+    if (parking_store_get_status(demo->store, &demo->store_status) != 0) {
+        log_store_error(demo, "刷新停车场状态失败");
+        return -1;
+    }
+
+    return 0;
+}
+
+static gate_state_t ui_gate_state(const parking_demo_t *demo)
+{
+    parking_state_t state;
+
+    if (demo->enable_gate)
+        return demo->observed_gate_state;
+
+    state = parking_controller_state(demo->controller);
+    switch (state) {
+        case PARKING_STATE_OPENING:
+            return GATE_STATE_OPENING;
+        case PARKING_STATE_WAIT_PASSAGE:
+            return GATE_STATE_OPEN;
+        case PARKING_STATE_CLOSING:
+            return GATE_STATE_CLOSING;
+        case PARKING_STATE_ERROR:
+            return GATE_STATE_ERROR;
+        default:
+            return GATE_STATE_CLOSED;
+    }
+}
+
+static int update_parking_ui(parking_demo_t *demo)
+{
+    parking_ui_status_t status;
+
+    memset(&status, 0, sizeof(status));
+    status.lane_mode = parking_controller_mode(demo->controller);
+    status.business_state = parking_controller_state(demo->controller);
+    status.reason = demo->ui_reason;
+    status.gate_state = ui_gate_state(demo);
+    status.gate_is_real = demo->enable_gate;
+    status.plate_number = demo->last_plate;
+    status.plate_color = demo->last_plate_color;
+    status.confidence = demo->last_confidence;
+    status.amount_cents = demo->amount_cents;
+    status.total_spaces = demo->store_status.total_spaces;
+    status.occupied_spaces = demo->store_status.occupied_spaces;
+    status.available_spaces = demo->store_status.available_spaces;
+    return parking_ui_set_status(demo->ui, &status);
+}
+
 static parking_reason_t map_store_reason(parking_store_reason_t reason)
 {
     switch (reason) {
@@ -355,6 +424,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     log_store_error(demo, "SQLite 入场检查失败");
                     return -1;
                 }
+                copy_check_status(demo, &check_result);
 
                 if (!check_result.allowed) {
                     LOG_WARN("SQLite 入场检查拒绝: %s, 原因=%s",
@@ -363,6 +433,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_CHECK_REJECTED;
                     response.data.rejection.reason =
                         map_store_reason(check_result.reason);
+                    demo->ui_reason = response.data.rejection.reason;
                     break;
                 }
 
@@ -375,6 +446,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                 response.type = PARKING_EVENT_CHECK_APPROVED;
                 response.data.check.operation_id = check_result.operation_id;
                 response.data.check.payment_required = 0;
+                demo->amount_cents = 0;
                 break;
             }
 
@@ -392,6 +464,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     log_store_error(demo, "SQLite 出场检查失败");
                     return -1;
                 }
+                copy_check_status(demo, &check_result);
 
                 if (!check_result.allowed) {
                     LOG_WARN("SQLite 出场检查拒绝: %s, 原因=%s",
@@ -400,6 +473,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_CHECK_REJECTED;
                     response.data.rejection.reason =
                         map_store_reason(check_result.reason);
+                    demo->ui_reason = response.data.rejection.reason;
                     break;
                 }
 
@@ -413,6 +487,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                 response.data.check.amount_cents = check_result.amount_cents;
                 response.data.check.payment_required =
                     check_result.payment_required;
+                demo->amount_cents = check_result.amount_cents;
                 break;
             }
 
@@ -436,6 +511,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_GATE_FAILED;
                     response.data.failure.reason =
                         PARKING_REASON_GATE_FAILURE;
+                    demo->ui_reason = PARKING_REASON_GATE_FAILURE;
                     break;
                 }
 
@@ -461,6 +537,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_GATE_FAILED;
                     response.data.failure.reason =
                         PARKING_REASON_GATE_FAILURE;
+                    demo->ui_reason = PARKING_REASON_GATE_FAILURE;
                     break;
                 }
 
@@ -482,11 +559,14 @@ static int execute_demo_commands(parking_demo_t *demo,
                         command->plate_number, database_now_us) != 0) {
                     log_store_error(demo, "SQLite 入场提交失败");
                     response.type = PARKING_EVENT_COMMIT_FAILED;
+                    demo->ui_reason = PARKING_REASON_COMMIT_FAILURE;
                 } else {
                     LOG_INFO("SQLite 入场完成: %s, operation_id=%" PRIu64,
                              command->plate_number,
                              command->operation_id);
                     response.type = PARKING_EVENT_COMMIT_SUCCEEDED;
+                    if (refresh_store_status(demo) != 0)
+                        return -1;
                 }
                 break;
 
@@ -500,11 +580,14 @@ static int execute_demo_commands(parking_demo_t *demo,
                         command->plate_number, database_now_us) != 0) {
                     log_store_error(demo, "SQLite 出场提交失败");
                     response.type = PARKING_EVENT_COMMIT_FAILED;
+                    demo->ui_reason = PARKING_REASON_COMMIT_FAILURE;
                 } else {
                     LOG_INFO("SQLite 出场完成: %s, operation_id=%" PRIu64,
                              command->plate_number,
                              command->operation_id);
                     response.type = PARKING_EVENT_COMMIT_SUCCEEDED;
+                    if (refresh_store_status(demo) != 0)
+                        return -1;
                 }
                 break;
 
@@ -512,6 +595,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                 LOG_WARN("[DRY-RUN] 业务拒绝: %s, 原因=%s",
                          command->plate_number,
                          parking_controller_reason_name(command->reason));
+                demo->ui_reason = command->reason;
                 has_response = 0;
                 break;
 
@@ -524,6 +608,7 @@ static int execute_demo_commands(parking_demo_t *demo,
                 LOG_ERROR("停车业务状态机失败: %s, 原因=%s",
                           error[0] != '\0' ? error : "未知错误",
                           parking_controller_reason_name(command->reason));
+                demo->ui_reason = command->reason;
                 return -1;
             }
 
@@ -593,6 +678,16 @@ static int process_plate_events(plate_pipeline_t *pipeline,
                  pipeline_event.result.color_name,
                  pipeline_event.result.detect_confidence);
 
+        snprintf(demo->last_plate, sizeof(demo->last_plate), "%s",
+                 pipeline_event.result.plate_number);
+        snprintf(demo->last_plate_color,
+                 sizeof(demo->last_plate_color), "%s",
+                 pipeline_event.result.color_name);
+        demo->last_confidence =
+            pipeline_event.result.detect_confidence;
+        demo->amount_cents = 0;
+        demo->ui_reason = PARKING_REASON_NONE;
+
         memset(&business_event, 0, sizeof(business_event));
         business_event.type = PARKING_EVENT_PLATE_CONFIRMED;
         business_event.occurred_at_us = pipeline_event.confirmed_at_us;
@@ -613,6 +708,7 @@ static int update_parking_controller(plate_pipeline_t *pipeline,
     parking_command_list_t commands;
     uint64_t now_us;
     uint64_t last_plate_seen_us;
+    int result;
 
     last_plate_seen_us = plate_pipeline_last_plate_seen_us(pipeline);
     if (monotonic_us(&now_us) != 0) {
@@ -633,15 +729,17 @@ static int update_parking_controller(plate_pipeline_t *pipeline,
         return -1;
     }
 
-    return execute_demo_commands(demo, &commands, now_us, 0);
+    result = execute_demo_commands(demo, &commands, now_us, 0);
+    if (result == 0 &&
+        parking_controller_state(demo->controller) == PARKING_STATE_IDLE)
+        demo->ui_reason = PARKING_REASON_NONE;
+    return result;
 }
 
-static int run_loop(plate_pipeline_t *pipeline, display_t *display,
-                    parking_demo_t *demo)
+static int run_loop(plate_pipeline_t *pipeline, parking_demo_t *demo)
 {
     while(running){
         pipeline_frame_t frame;
-        display_frame_t display_frame;
         int result;
 
         if (update_real_gate(demo) != 0)
@@ -652,6 +750,10 @@ static int run_loop(plate_pipeline_t *pipeline, display_t *display,
 
         if (update_parking_controller(pipeline, demo) != 0)
             return -1;
+
+        if (update_parking_ui(demo) != 0)
+            return -1;
+        parking_ui_process(demo->ui);
 
         memset(&frame, 0, sizeof(frame));
         result = plate_pipeline_take_frame(pipeline, &frame, PIPELINE_WAIT_MS);
@@ -667,20 +769,16 @@ static int run_loop(plate_pipeline_t *pipeline, display_t *display,
             return -1;
         }
 
-        memset(&display_frame, 0, sizeof(display_frame));
-        display_frame.data = frame.image.data;
-        display_frame.width = frame.image.width;
-        display_frame.height = frame.image.height;
-        display_frame.stride = frame.image.stride;
-        display_frame.pixel_format = DISPLAY_PIXEL_FORMAT_BGR888;
-
-        if(display_present(display, &display_frame) != 0){
+        if (parking_ui_present_bgr(demo->ui, frame.image.data,
+                                   frame.image.width, frame.image.height,
+                                   frame.image.stride) != 0) {
             pipeline_frame_release(&frame);
             LOG_ERROR("显示图像失败");
             return -1;
         }
 
         pipeline_frame_release(&frame);
+        parking_ui_process(demo->ui);
     }
 
     return plate_pipeline_failed(pipeline) ? -1 : 0;
@@ -693,13 +791,13 @@ int main(int argc, char **argv)
     parking_controller_config_t controller_config;
     parking_store_config_t store_config;
     parking_store_status_t store_status;
-    display_config_t display_config;
+    parking_ui_config_t ui_config;
     parking_demo_t demo;
     plate_pipeline_t *pipeline = NULL;
     parking_controller_t *controller = NULL;
     parking_fee_t *fee = NULL;
     parking_store_t *store = NULL;
-    display_t *display = NULL;
+    parking_ui_t *ui = NULL;
     gate_t *gate = NULL;
     parking_lane_mode_t lane_mode;
     const char *database_path;
@@ -760,15 +858,19 @@ int main(int argc, char **argv)
     demo.fee = fee;
     demo.store = store;
     demo.enable_gate = enable_gate;
+    demo.store_status = store_status;
 
-    memset(&display_config, 0, sizeof(display_config));
-    display_config.device = FRAMEBUFFER_DEVICE;
-    display_config.keep_aspect_ratio = 1;
+    memset(&ui_config, 0, sizeof(ui_config));
+    ui_config.device = DRM_DEVICE;
+    ui_config.connector_id = -1;
+    ui_config.font_path = FONT_PATH;
 
-    display = display_create(&display_config);
-    if(display == NULL){
+    ui = parking_ui_create(&ui_config);
+    if (ui == NULL) {
+        LOG_ERROR("创建 LVGL 停车界面失败");
         goto cleanup;
     }
+    demo.ui = ui;
 
     memset(&pipeline_config, 0, sizeof(pipeline_config));
     pipeline_config.camera.device = CAMERA_DEVICE;
@@ -813,16 +915,16 @@ int main(int argc, char **argv)
              store_status.pending_entry_operations,
              enable_gate ? "REAL" : "DRY-RUN");
 
-    if (run_loop(pipeline, display, &demo) == 0)
+    if (run_loop(pipeline, &demo) == 0)
         exit_code = 0;
 
 cleanup:
     plate_pipeline_stop(pipeline);
     plate_pipeline_destroy(pipeline);
+    parking_ui_destroy(ui);
     parking_store_close(store);
     parking_fee_destroy(fee);
     parking_controller_destroy(controller);
-    display_destroy(display);
     gate_destroy(gate);
 
     return exit_code;
