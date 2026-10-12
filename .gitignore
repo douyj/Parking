@@ -26,6 +26,11 @@ Testing/
 *.dylib
 *.exe
 *.out
+*.d
+*.gcda
+*.gcno
+*.profdata
+*.profraw
 
 # Keep the prebuilt RKNN runtime library shipped with this project
 !/lib/
@@ -33,13 +38,21 @@ Testing/
 
 # Runtime and test output
 *.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 core
 core.*
 recognition_result*.jpg
 
 # Editor and IDE settings
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+.cache/
 *.code-workspace
 *.swp
 *.swo

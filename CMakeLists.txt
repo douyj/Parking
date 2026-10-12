@@ -22,9 +22,12 @@ option(PARKING_BUILD_LVGL_TEST
     OFF
 )
 
-set(PARKING_LVGL_SOURCE_DIR "" CACHE PATH
-    "Optional local LVGL v9.6.0 source directory"
-)
+set(PARKING_LVGL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl"
+    CACHE PATH "LVGL v9.6.0 source directory")
+if(NOT PARKING_LVGL_SOURCE_DIR)
+    set(PARKING_LVGL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl"
+        CACHE PATH "LVGL v9.6.0 source directory" FORCE)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -44,16 +47,13 @@ include(FetchContent)
 set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps"
     CACHE PATH "Downloaded dependency directory" FORCE)
 
-if(PARKING_LVGL_SOURCE_DIR)
-    FetchContent_Declare(lvgl SOURCE_DIR "${PARKING_LVGL_SOURCE_DIR}")
-else()
-    FetchContent_Declare(lvgl
-        GIT_REPOSITORY https://github.com/lvgl/lvgl.git
-        GIT_TAG v9.6.0
-        GIT_SHALLOW TRUE
-        GIT_PROGRESS TRUE
-    )
+if(NOT EXISTS "${PARKING_LVGL_SOURCE_DIR}/CMakeLists.txt" OR
+   NOT EXISTS "${PARKING_LVGL_SOURCE_DIR}/include/lvgl/lv_version.h")
+    message(FATAL_ERROR
+        "LVGL v9.6.0 source not found: ${PARKING_LVGL_SOURCE_DIR}")
 endif()
+
+FetchContent_Declare(lvgl SOURCE_DIR "${PARKING_LVGL_SOURCE_DIR}")
 
 set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lv_conf.h"
     CACHE FILEPATH "LVGL configuration" FORCE)
