@@ -2,6 +2,7 @@
 #include "log.h"
 #include "parking_controller.h"
 #include "parking_fee.h"
+#include "parking_mqtt_reporter.h"
 #include "parking_store.h"
 #include "parking_ui.h"
 #include "plate_pipeline.h"
@@ -12,6 +13,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -26,6 +28,11 @@
 #define RECOGNITION_MODEL       "models/plate_rec_color-rk3576.rknn"
 #define FONT_PATH               "fonts/platech.ttf"
 #define DEFAULT_DATABASE_PATH   "parking.db"
+#define PARKING_SOFTWARE_VERSION "1.0.0"
+
+#define DEFAULT_MQTT_SITE_ID     "parking"
+#define DEFAULT_MQTT_DEVICE_ID   "rk3576"
+#define MQTT_STATUS_RETRY_US     1000000ULL
 
 #define GATE_PWMCHIP_PATH       "/sys/class/pwm/pwmchip2"
 #define GATE_PWM_CHANNEL        0U
@@ -40,18 +47,36 @@
 #define DEMO_MAX_DISPATCH_DEPTH 8U
 
 typedef struct {
+    parking_lane_mode_t lane_mode;
+    const char *database_path;
+    int enable_gate;
+    const char *mqtt_host;
+    unsigned int mqtt_port;
+    const char *mqtt_site_id;
+    const char *mqtt_device_id;
+    const char *mqtt_username;
+    const char *mqtt_password;
+    const char *mqtt_ca_file;
+} parking_options_t;
+
+typedef struct {
     parking_controller_t *controller;
     parking_fee_t *fee;
     parking_store_t *store;
     parking_ui_t *ui;
     gate_t *gate;
+    parking_mqtt_reporter_t *mqtt;
     gate_state_t observed_gate_state;
     parking_store_status_t store_status;
+    parking_mqtt_reporter_status_t mqtt_status;
     parking_reason_t ui_reason;
     char last_plate[PARKING_PLATE_CAPACITY];
     char last_plate_color[32];
+    char active_plate_color[32];
     float last_confidence;
     uint64_t amount_cents;
+    uint64_t mqtt_status_retry_at_us;
+    int mqtt_status_valid;
     int enable_gate;
 } parking_demo_t;
 
@@ -90,28 +115,54 @@ static void print_usage(const char *program)
 {
     fprintf(stderr,
             "用法: %s [--lane-mode entry|exit] [--database PATH] "
-            "[--enable-gate]\n"
+            "[--enable-gate] [MQTT 选项]\n"
             "  默认模式       Gate 为 DRY-RUN\n"
-            "  --enable-gate  直接驱动真实 Gate，不进行交互确认\n",
+            "  --enable-gate  直接驱动真实 Gate，不进行交互确认\n"
+            "  --mqtt-host HOST      启用 MQTT 上报\n"
+            "  --mqtt-port PORT      Broker 端口，默认 1883\n"
+            "  --mqtt-site ID        停车场 ID，默认 parking\n"
+            "  --mqtt-device ID      设备 ID，默认 rk3576\n"
+            "  --mqtt-username USER  可选用户名\n"
+            "  --mqtt-password PASS  可选密码\n"
+            "  --mqtt-ca-file PATH   可选 CA 文件\n",
             program != NULL ? program : "parking");
 }
 
-static int parse_arguments(int argc, char **argv,
-                           parking_lane_mode_t *mode,
-                           const char **database_path,
-                           int *enable_gate)
+static int parse_positive_uint(const char *text, unsigned int maximum,
+                               unsigned int *value)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    errno = 0;
+    parsed = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed == 0U ||
+        parsed > maximum)
+        return -1;
+
+    *value = (unsigned int)parsed;
+    return 0;
+}
+
+static int parse_arguments(int argc, char **argv, parking_options_t *options)
 {
     int i;
 
-    if (argv == NULL || mode == NULL || database_path == NULL ||
-        enable_gate == NULL)
+    if (argv == NULL || options == NULL)
         return -1;
 
-    *mode = PARKING_LANE_ENTRY;
-    *database_path = DEFAULT_DATABASE_PATH;
-    *enable_gate = 0;
+    memset(options, 0, sizeof(*options));
+    options->lane_mode = PARKING_LANE_ENTRY;
+    options->database_path = DEFAULT_DATABASE_PATH;
+    options->mqtt_port = PARKING_MQTT_DEFAULT_PORT;
+    options->mqtt_site_id = DEFAULT_MQTT_SITE_ID;
+    options->mqtt_device_id = DEFAULT_MQTT_DEVICE_ID;
+
     for (i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--help") == 0) {
+        const char **string_value = NULL;
+
+        if (strcmp(argv[i], "--help") == 0 ||
+            strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 1;
         }
@@ -124,9 +175,9 @@ static int parse_arguments(int argc, char **argv,
 
             ++i;
             if (strcmp(argv[i], "entry") == 0)
-                *mode = PARKING_LANE_ENTRY;
+                options->lane_mode = PARKING_LANE_ENTRY;
             else if (strcmp(argv[i], "exit") == 0)
-                *mode = PARKING_LANE_EXIT;
+                options->lane_mode = PARKING_LANE_EXIT;
             else {
                 print_usage(argv[0]);
                 return -1;
@@ -140,12 +191,44 @@ static int parse_arguments(int argc, char **argv,
                 return -1;
             }
 
-            *database_path = argv[++i];
+            options->database_path = argv[++i];
             continue;
         }
 
         if (strcmp(argv[i], "--enable-gate") == 0) {
-            *enable_gate = 1;
+            options->enable_gate = 1;
+            continue;
+        }
+
+        if (strcmp(argv[i], "--mqtt-host") == 0)
+            string_value = &options->mqtt_host;
+        else if (strcmp(argv[i], "--mqtt-site") == 0)
+            string_value = &options->mqtt_site_id;
+        else if (strcmp(argv[i], "--mqtt-device") == 0)
+            string_value = &options->mqtt_device_id;
+        else if (strcmp(argv[i], "--mqtt-username") == 0)
+            string_value = &options->mqtt_username;
+        else if (strcmp(argv[i], "--mqtt-password") == 0)
+            string_value = &options->mqtt_password;
+        else if (strcmp(argv[i], "--mqtt-ca-file") == 0)
+            string_value = &options->mqtt_ca_file;
+
+        if (string_value != NULL) {
+            if (++i >= argc || argv[i][0] == '\0') {
+                print_usage(argv[0]);
+                return -1;
+            }
+            *string_value = argv[i];
+            continue;
+        }
+
+        if (strcmp(argv[i], "--mqtt-port") == 0) {
+            if (++i >= argc ||
+                parse_positive_uint(argv[i], 65535U,
+                                    &options->mqtt_port) != 0) {
+                print_usage(argv[0]);
+                return -1;
+            }
             continue;
         }
 
@@ -337,6 +420,195 @@ static gate_state_t ui_gate_state(const parking_demo_t *demo)
     }
 }
 
+static parking_protocol_lane_mode_t mqtt_lane_mode(parking_lane_mode_t mode)
+{
+    return mode == PARKING_LANE_EXIT
+        ? PARKING_PROTOCOL_LANE_EXIT : PARKING_PROTOCOL_LANE_ENTRY;
+}
+
+static parking_protocol_business_state_t mqtt_business_state(
+    parking_state_t state)
+{
+    switch (state) {
+        case PARKING_STATE_INITIALIZING:
+            return PARKING_PROTOCOL_BUSINESS_INITIALIZING;
+        case PARKING_STATE_IDLE:
+            return PARKING_PROTOCOL_BUSINESS_IDLE;
+        case PARKING_STATE_CHECKING:
+            return PARKING_PROTOCOL_BUSINESS_CHECKING;
+        case PARKING_STATE_WAIT_PAYMENT:
+            return PARKING_PROTOCOL_BUSINESS_WAIT_PAYMENT;
+        case PARKING_STATE_OPENING:
+            return PARKING_PROTOCOL_BUSINESS_OPENING;
+        case PARKING_STATE_WAIT_PASSAGE:
+            return PARKING_PROTOCOL_BUSINESS_WAIT_PASSAGE;
+        case PARKING_STATE_CLOSING:
+            return PARKING_PROTOCOL_BUSINESS_CLOSING;
+        case PARKING_STATE_COMPLETING:
+            return PARKING_PROTOCOL_BUSINESS_COMPLETING;
+        case PARKING_STATE_REJECT_COOLDOWN:
+            return PARKING_PROTOCOL_BUSINESS_REJECT_COOLDOWN;
+        case PARKING_STATE_ERROR:
+        default:
+            return PARKING_PROTOCOL_BUSINESS_ERROR;
+    }
+}
+
+static parking_protocol_gate_state_t mqtt_gate_state(gate_state_t state)
+{
+    switch (state) {
+        case GATE_STATE_CLOSED:
+            return PARKING_PROTOCOL_GATE_CLOSED;
+        case GATE_STATE_OPENING:
+            return PARKING_PROTOCOL_GATE_OPENING;
+        case GATE_STATE_OPEN:
+            return PARKING_PROTOCOL_GATE_OPEN;
+        case GATE_STATE_CLOSING:
+            return PARKING_PROTOCOL_GATE_CLOSING;
+        case GATE_STATE_ERROR:
+        default:
+            return PARKING_PROTOCOL_GATE_ERROR;
+    }
+}
+
+static int mqtt_passage_source(
+    parking_passage_source_t source,
+    parking_protocol_passage_source_t *mqtt_source)
+{
+    if (mqtt_source == NULL)
+        return -1;
+
+    switch (source) {
+        case PARKING_PASSAGE_SENSOR:
+            *mqtt_source = PARKING_PROTOCOL_PASSAGE_SENSOR;
+            return 0;
+        case PARKING_PASSAGE_MANUAL:
+            *mqtt_source = PARKING_PROTOCOL_PASSAGE_MANUAL;
+            return 0;
+        case PARKING_PASSAGE_VISION_TIMEOUT:
+            *mqtt_source = PARKING_PROTOCOL_PASSAGE_VISION_TIMEOUT;
+            return 0;
+        case PARKING_PASSAGE_NONE:
+        default:
+            return -1;
+    }
+}
+
+static parking_protocol_spaces_t mqtt_spaces(
+    const parking_store_status_t *status)
+{
+    parking_protocol_spaces_t spaces;
+
+    memset(&spaces, 0, sizeof(spaces));
+    spaces.total = status->total_spaces;
+    spaces.occupied = status->occupied_spaces;
+    spaces.pending_entries = status->pending_entry_operations;
+    spaces.available = status->available_spaces;
+    return spaces;
+}
+
+static void log_mqtt_error(parking_demo_t *demo, const char *operation,
+                           int result)
+{
+    char error[ERROR_MESSAGE_CAPACITY];
+
+    if (result == PARKING_MQTT_QUEUE_FULL) {
+        LOG_WARN("%s: MQTT 发布队列已满", operation);
+        return;
+    }
+
+    memset(error, 0, sizeof(error));
+    if (demo != NULL && demo->mqtt != NULL) {
+        parking_mqtt_reporter_copy_last_error(
+            demo->mqtt, error, sizeof(error));
+    }
+    LOG_WARN("%s: %s", operation,
+             error[0] != '\0' ? error : "MQTT 上报未接受消息");
+}
+
+static int publish_mqtt_status(parking_demo_t *demo)
+{
+    parking_mqtt_reporter_status_t status;
+    uint64_t now_us;
+    int result;
+
+    if (demo == NULL || demo->mqtt == NULL)
+        return 0;
+
+    memset(&status, 0, sizeof(status));
+    status.lane_mode = mqtt_lane_mode(
+        parking_controller_mode(demo->controller));
+    status.business_state = mqtt_business_state(
+        parking_controller_state(demo->controller));
+    status.gate_mode = demo->enable_gate
+        ? PARKING_PROTOCOL_GATE_REAL : PARKING_PROTOCOL_GATE_DRY_RUN;
+    status.gate_state = mqtt_gate_state(ui_gate_state(demo));
+    status.camera_state = PARKING_PROTOCOL_COMPONENT_OK;
+    status.recognizer_state = PARKING_PROTOCOL_COMPONENT_OK;
+    status.database_state = PARKING_PROTOCOL_COMPONENT_OK;
+    status.spaces = mqtt_spaces(&demo->store_status);
+
+    if (demo->mqtt_status_valid &&
+        memcmp(&status, &demo->mqtt_status, sizeof(status)) == 0)
+        return 0;
+
+    if (monotonic_us(&now_us) != 0)
+        return -1;
+    if (now_us < demo->mqtt_status_retry_at_us)
+        return 0;
+
+    result = parking_mqtt_reporter_publish_status(demo->mqtt, &status);
+    if (result != PARKING_MQTT_OK) {
+        demo->mqtt_status_retry_at_us = now_us + MQTT_STATUS_RETRY_US;
+        log_mqtt_error(demo, "发布 MQTT 状态失败", result);
+        return 0;
+    }
+
+    demo->mqtt_status = status;
+    demo->mqtt_status_valid = 1;
+    demo->mqtt_status_retry_at_us = 0U;
+    return 0;
+}
+
+static void publish_mqtt_vehicle_event(
+    parking_demo_t *demo,
+    const parking_command_t *command,
+    uint64_t committed_at_unix_us)
+{
+    parking_mqtt_reporter_vehicle_event_t event;
+    int result;
+
+    if (demo == NULL || demo->mqtt == NULL || command == NULL)
+        return;
+
+    memset(&event, 0, sizeof(event));
+    event.event_type = command->type == PARKING_COMMAND_COMPLETE_ENTRY
+        ? PARKING_PROTOCOL_EVENT_ENTRY : PARKING_PROTOCOL_EVENT_EXIT;
+    event.operation_id = command->operation_id;
+    event.committed_at_unix_us = committed_at_unix_us;
+    event.plate_number = command->plate_number;
+    event.plate_color = demo->active_plate_color;
+    event.detect_confidence = command->confidence;
+    event.amount_cents = command->amount_cents;
+    event.spaces = mqtt_spaces(&demo->store_status);
+    if (mqtt_passage_source(command->passage_source,
+                            &event.passage_source) != 0) {
+        LOG_WARN("跳过 MQTT 车辆事件: operation_id=%" PRIu64
+                 " 缺少有效通行来源", command->operation_id);
+        return;
+    }
+
+    result = parking_mqtt_reporter_publish_vehicle_event(
+        demo->mqtt, &event);
+    if (result != PARKING_MQTT_OK) {
+        log_mqtt_error(demo, "发布 MQTT 车辆事件失败", result);
+        return;
+    }
+
+    LOG_INFO("MQTT 车辆事件已入队: operation_id=%" PRIu64,
+             command->operation_id);
+}
+
 static int update_parking_ui(parking_demo_t *demo)
 {
     parking_ui_status_t status;
@@ -412,6 +684,9 @@ static int execute_demo_commands(parking_demo_t *demo,
 
         switch (command->type) {
             case PARKING_COMMAND_CHECK_ENTRY: {
+                snprintf(demo->active_plate_color,
+                         sizeof(demo->active_plate_color), "%s",
+                         demo->last_plate_color);
                 if (realtime_us(&database_now_us) != 0) {
                     LOG_ERROR("获取入场数据库时间失败");
                     return -1;
@@ -451,6 +726,9 @@ static int execute_demo_commands(parking_demo_t *demo,
             }
 
             case PARKING_COMMAND_CHECK_EXIT: {
+                snprintf(demo->active_plate_color,
+                         sizeof(demo->active_plate_color), "%s",
+                         demo->last_plate_color);
                 if (realtime_us(&database_now_us) != 0) {
                     LOG_ERROR("获取出场数据库时间失败");
                     return -1;
@@ -567,6 +845,8 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_COMMIT_SUCCEEDED;
                     if (refresh_store_status(demo) != 0)
                         return -1;
+                    publish_mqtt_vehicle_event(
+                        demo, command, database_now_us);
                 }
                 break;
 
@@ -588,6 +868,8 @@ static int execute_demo_commands(parking_demo_t *demo,
                     response.type = PARKING_EVENT_COMMIT_SUCCEEDED;
                     if (refresh_store_status(demo) != 0)
                         return -1;
+                    publish_mqtt_vehicle_event(
+                        demo, command, database_now_us);
                 }
                 break;
 
@@ -751,6 +1033,8 @@ static int run_loop(plate_pipeline_t *pipeline, parking_demo_t *demo)
         if (update_parking_controller(pipeline, demo) != 0)
             return -1;
 
+        (void)publish_mqtt_status(demo);
+
         if (update_parking_ui(demo) != 0)
             return -1;
         parking_ui_process(demo->ui);
@@ -792,6 +1076,9 @@ int main(int argc, char **argv)
     parking_store_config_t store_config;
     parking_store_status_t store_status;
     parking_ui_config_t ui_config;
+    parking_mqtt_reporter_config_t mqtt_config;
+    parking_mqtt_stats_t mqtt_stats;
+    parking_options_t options;
     parking_demo_t demo;
     plate_pipeline_t *pipeline = NULL;
     parking_controller_t *controller = NULL;
@@ -799,14 +1086,11 @@ int main(int argc, char **argv)
     parking_store_t *store = NULL;
     parking_ui_t *ui = NULL;
     gate_t *gate = NULL;
-    parking_lane_mode_t lane_mode;
-    const char *database_path;
-    int enable_gate;
+    parking_mqtt_reporter_t *mqtt = NULL;
     int argument_result;
     int exit_code = 1;
 
-    argument_result = parse_arguments(argc, argv, &lane_mode,
-                                      &database_path, &enable_gate);
+    argument_result = parse_arguments(argc, argv, &options);
     if (argument_result > 0)
         return 0;
     if (argument_result < 0)
@@ -817,8 +1101,8 @@ int main(int argc, char **argv)
     }
 
     memset(&controller_config, 0, sizeof(controller_config));
-    controller_config.mode = lane_mode;
-    controller_config.gate_initially_closed = enable_gate ? 0 : 1;
+    controller_config.mode = options.lane_mode;
+    controller_config.gate_initially_closed = options.enable_gate ? 0 : 1;
 
     controller = parking_controller_create(&controller_config);
     if (controller == NULL)
@@ -831,7 +1115,7 @@ int main(int argc, char **argv)
     }
 
     memset(&store_config, 0, sizeof(store_config));
-    store_config.database_path = database_path;
+    store_config.database_path = options.database_path;
     store_config.initial_total_spaces =
         PARKING_STORE_DEFAULT_TOTAL_SPACES;
     store_config.busy_timeout_ms =
@@ -839,7 +1123,7 @@ int main(int argc, char **argv)
 
     store = parking_store_open(&store_config);
     if (store == NULL) {
-        LOG_ERROR("打开停车数据库失败: %s", database_path);
+        LOG_ERROR("打开停车数据库失败: %s", options.database_path);
         goto cleanup;
     }
 
@@ -857,7 +1141,7 @@ int main(int argc, char **argv)
     demo.controller = controller;
     demo.fee = fee;
     demo.store = store;
-    demo.enable_gate = enable_gate;
+    demo.enable_gate = options.enable_gate;
     demo.store_status = store_status;
 
     memset(&ui_config, 0, sizeof(ui_config));
@@ -895,7 +1179,7 @@ int main(int argc, char **argv)
     if (pipeline == NULL)
         goto cleanup;
 
-    if (enable_gate) {
+    if (options.enable_gate) {
         gate = create_real_gate();
         if (gate == NULL)
             goto cleanup;
@@ -906,14 +1190,48 @@ int main(int argc, char **argv)
     if (plate_pipeline_start(pipeline) != PLATE_PIPELINE_OK)
         goto cleanup;
 
+    if (options.mqtt_host != NULL) {
+        memset(&mqtt_config, 0, sizeof(mqtt_config));
+        mqtt_config.host = options.mqtt_host;
+        mqtt_config.port = (uint16_t)options.mqtt_port;
+        mqtt_config.site_id = options.mqtt_site_id;
+        mqtt_config.device_id = options.mqtt_device_id;
+        mqtt_config.username = options.mqtt_username;
+        mqtt_config.password = options.mqtt_password;
+        mqtt_config.ca_file = options.mqtt_ca_file;
+        mqtt_config.software_version = PARKING_SOFTWARE_VERSION;
+
+        mqtt = parking_mqtt_reporter_create(&mqtt_config);
+        if (mqtt == NULL) {
+            LOG_WARN("%s", "创建 MQTT 上报模块失败，停车业务继续运行");
+        } else if (parking_mqtt_reporter_start(mqtt) != PARKING_MQTT_OK) {
+            char error[ERROR_MESSAGE_CAPACITY];
+
+            memset(error, 0, sizeof(error));
+            parking_mqtt_reporter_copy_last_error(
+                mqtt, error, sizeof(error));
+            LOG_WARN("启动 MQTT 上报模块失败，停车业务继续运行: %s",
+                     error[0] != '\0' ? error : "未知错误");
+            parking_mqtt_reporter_destroy(mqtt);
+            mqtt = NULL;
+        } else {
+            demo.mqtt = mqtt;
+            (void)publish_mqtt_status(&demo);
+            LOG_INFO("MQTT 上报已启用: %s:%u, topic=parking/v1/%s/%s",
+                     options.mqtt_host, options.mqtt_port,
+                     options.mqtt_site_id, options.mqtt_device_id);
+        }
+    }
+
     LOG_INFO("Parking 主程序启动，车道模式=%s，SQLite=%s，"
              "可用车位=%u/%u，未完成入场=%u，"
-             "支付=DRY-RUN，Gate=%s，按 Ctrl+C 退出",
-             lane_mode_name(lane_mode), database_path,
+             "支付=DRY-RUN，Gate=%s，MQTT=%s，按 Ctrl+C 退出",
+             lane_mode_name(options.lane_mode), options.database_path,
              store_status.available_spaces,
              store_status.total_spaces,
              store_status.pending_entry_operations,
-             enable_gate ? "REAL" : "DRY-RUN");
+             options.enable_gate ? "REAL" : "DRY-RUN",
+             mqtt != NULL ? options.mqtt_host : "DISABLED");
 
     if (run_loop(pipeline, &demo) == 0)
         exit_code = 0;
@@ -921,6 +1239,23 @@ int main(int argc, char **argv)
 cleanup:
     plate_pipeline_stop(pipeline);
     plate_pipeline_destroy(pipeline);
+    parking_mqtt_reporter_stop(mqtt);
+    memset(&mqtt_stats, 0, sizeof(mqtt_stats));
+    if (mqtt != NULL &&
+        parking_mqtt_reporter_get_stats(mqtt, &mqtt_stats) ==
+            PARKING_MQTT_OK) {
+        LOG_INFO("MQTT 统计: 连接尝试=%" PRIu64
+                 "，成功连接=%" PRIu64 "，断线=%" PRIu64
+                 "，入队=%" PRIu64 "，确认=%" PRIu64
+                 "，拒绝=%" PRIu64,
+                 mqtt_stats.connect_attempts,
+                 mqtt_stats.successful_connections,
+                 mqtt_stats.disconnects,
+                 mqtt_stats.enqueued_messages,
+                 mqtt_stats.acknowledged_messages,
+                 mqtt_stats.rejected_messages);
+    }
+    parking_mqtt_reporter_destroy(mqtt);
     parking_ui_destroy(ui);
     parking_store_close(store);
     parking_fee_destroy(fee);

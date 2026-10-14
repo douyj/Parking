@@ -43,6 +43,38 @@ if(CMAKE_CROSSCOMPILING AND DEFINED RK3576_SDK_ROOT)
     unset(_parking_libdrm_package_dir)
 endif()
 
+set(PARKING_MOSQUITTO_PACKAGE_DIR
+    "/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/debian12/packages/arm64/mosquitto"
+    CACHE PATH "ARM64 libmosquitto package directory")
+set(PARKING_MOSQUITTO_DEV_DEB
+    "${PARKING_MOSQUITTO_PACKAGE_DIR}/libmosquitto-dev_2.0.11-1.2+deb12u2_arm64.deb"
+    CACHE FILEPATH "ARM64 libmosquitto development package")
+
+find_program(PARKING_DPKG_DEB_EXECUTABLE dpkg-deb)
+if(NOT PARKING_DPKG_DEB_EXECUTABLE)
+    message(FATAL_ERROR "dpkg-deb is required to extract mosquitto.h")
+endif()
+if(NOT EXISTS "${PARKING_MOSQUITTO_DEV_DEB}")
+    message(FATAL_ERROR
+        "ARM64 libmosquitto development package not found: "
+        "${PARKING_MOSQUITTO_DEV_DEB}")
+endif()
+
+set(PARKING_MOSQUITTO_EXTRACT_DIR
+    "${CMAKE_BINARY_DIR}/_deps/mosquitto-dev")
+file(MAKE_DIRECTORY "${PARKING_MOSQUITTO_EXTRACT_DIR}")
+execute_process(
+    COMMAND "${PARKING_DPKG_DEB_EXECUTABLE}" -x
+        "${PARKING_MOSQUITTO_DEV_DEB}"
+        "${PARKING_MOSQUITTO_EXTRACT_DIR}"
+    RESULT_VARIABLE _parking_mosquitto_extract_result
+)
+if(NOT _parking_mosquitto_extract_result EQUAL 0 OR
+   NOT EXISTS "${PARKING_MOSQUITTO_EXTRACT_DIR}/usr/include/mosquitto.h")
+    message(FATAL_ERROR "Failed to extract mosquitto.h from ARM64 package")
+endif()
+unset(_parking_mosquitto_extract_result)
+
 include(FetchContent)
 set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps"
     CACHE PATH "Downloaded dependency directory" FORCE)
@@ -144,6 +176,77 @@ target_link_libraries(parking_storage_lib
         ${CMAKE_DL_LIBS}
 )
 
+# MQTT/JSON v1 协议编码层，不直接访问网络或业务模块。
+add_library(parking_protocol_lib STATIC
+    src/network/parking_protocol.c
+)
+
+target_include_directories(parking_protocol_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_compile_options(parking_protocol_lib
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
+# 独立 MQTT 网络线程。编译时只使用 ARM64 包中的公开头文件，运行时
+# dlopen 板端 libmosquitto，避免把板端 OpenSSL 3 混入旧工具链 sysroot。
+add_library(parking_mqtt_lib STATIC
+    src/network/parking_mqtt.c
+    src/network/parking_mqtt_mosquitto.c
+)
+
+target_include_directories(parking_mqtt_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/network"
+        "${PARKING_MOSQUITTO_EXTRACT_DIR}/usr/include"
+)
+
+target_link_libraries(parking_mqtt_lib
+    PUBLIC
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+)
+
+target_compile_options(parking_mqtt_lib
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
+# 正式程序的 MQTT 上报适配层，负责协议消息与网络队列之间的转换。
+add_library(parking_mqtt_reporter_lib STATIC
+    src/network/parking_mqtt_reporter.c
+)
+
+target_include_directories(parking_mqtt_reporter_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(parking_mqtt_reporter_lib
+    PUBLIC
+        parking_mqtt_lib
+        parking_protocol_lib
+)
+
+target_compile_options(parking_mqtt_reporter_lib
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
 # 正式 LVGL/DRM 停车界面，由主线程驱动，不直接访问业务或硬件模块。
 add_library(parking_ui_lib STATIC
     src/ui/parking_ui.c
@@ -219,6 +322,7 @@ target_link_libraries(parking
         plate_pipeline_lib
         parking_business_lib
         parking_storage_lib
+        parking_mqtt_reporter_lib
         parking_ui_lib
 )
 
@@ -304,6 +408,90 @@ target_link_libraries(test_parking_store
     PRIVATE
         parking_storage_lib
         parking_business_lib
+)
+
+# 纯 C MQTT/JSON 协议测试（不访问网络、数据库或硬件）
+add_executable(test_parking_protocol
+    tests/test_parking_protocol.c
+)
+
+target_link_libraries(test_parking_protocol
+    PRIVATE
+        parking_protocol_lib
+)
+
+target_compile_options(test_parking_protocol
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
+# 纯 C MQTT 工作线程测试，使用内存传输替身，不访问 Broker 或硬件。
+add_executable(test_parking_mqtt
+    tests/test_parking_mqtt.c
+)
+
+target_include_directories(test_parking_mqtt
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/network"
+)
+
+target_link_libraries(test_parking_mqtt
+    PRIVATE
+        parking_mqtt_lib
+)
+
+target_compile_options(test_parking_mqtt
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
+# 真实 Broker 手工测试，不注册到 CTest，也不访问 Camera、Gate 或数据库。
+add_executable(test_parking_mqtt_live
+    tests/test_parking_mqtt_live.c
+)
+
+target_link_libraries(test_parking_mqtt_live
+    PRIVATE
+        parking_mqtt_lib
+        parking_protocol_lib
+)
+
+target_compile_options(test_parking_mqtt_live
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
+# 上报适配层组合测试使用同步内存桩，不加载 Mosquitto 或连接 Broker。
+add_executable(test_parking_mqtt_reporter
+    tests/test_parking_mqtt_reporter.c
+    src/network/parking_mqtt_reporter.c
+)
+
+target_include_directories(test_parking_mqtt_reporter
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(test_parking_mqtt_reporter
+    PRIVATE
+        parking_protocol_lib
+)
+
+target_compile_options(test_parking_mqtt_reporter
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
 )
 
 # 摄像头测试

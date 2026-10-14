@@ -1,6 +1,6 @@
 # Parking 项目交接文档
 
-> 最后更新：2026-10-11（Asia/Shanghai）
+> 最后更新：2026-10-14（Asia/Shanghai）
 >
 > 新会话第一步：完整阅读本文，然后执行 `git status --short`。
 >
@@ -64,8 +64,18 @@ USB/V4L2 摄像头
 31. 2026-10-11 用户再次以出口模式识别已经完成出场的 `浙A66666`，SQLite 返回 `NO_ACTIVE_SESSION`，程序只记录业务拒绝，没有发出真实 Gate 开闸命令，也没有错误提交出场。异常拒绝不开闸已完成板端验证。
 32. 第一版独立 LVGL 9.6.0 + DRM/KMS 显示测试已实现：使用 `/dev/dri/card0`、XRGB8888 和 dumb buffer，Tiny-TTF 直接加载现有 `fonts/platech.ttf`；已通过严格告警和 RK3576 交叉编译。2026-10-11 板端首次运行确认 DSI-1、1024x600 和 plane 提交正常，但 LVGL plane 56 的 zpos 0 被 fbcon plane 96 的 zpos 1 覆盖；加入最高 zpos 补丁后，用户确认中文停车界面显示成功，Ctrl+C 后 fbcon 也能恢复。
 33. 正式 `parking_ui` 已实现并接入 `main.c`：在主线程使用 LVGL/DRM 显示 640x360 实时识别画面、入口/出口模式、车位统计、车牌与颜色、置信度、费用、业务状态、Gate 状态和拒绝原因；原 Camera、识别管线、SQLite、计费、Gate 与业务状态机接口未重写。已通过宿主业务回归、严格告警和 RK3576 全量交叉编译。2026-10-11 用户确认正式 `parking` 已在板端显示成功；本次没有提供逐项状态变化和退出清理日志，因此只确认正式 UI 与主循环能够共同运行。
+34. MQTT/JSON 协议 v1 已冻结：Topic 使用 `parking/v1/{site_id}/{device_id}/...`，定义 availability、heartbeat、status、entry/exit event，并预留 command request/reply；新增纯 C、无网络依赖的 `parking_protocol` 编码模块，验证 UTF-8、JSON 转义、枚举、车位一致性和缓冲区容量。宿主严格告警、8 组单元测试、ASan/UBSan 和 RK3576 交叉编译已通过；命令 Topic 不订阅且不能远程控制 Gate。
+35. RK3576 板端已安装 ARM64 `libmosquitto-dev`、`libmosquitto1` 和 `mosquitto-clients` 2.0.11；对应开发包和运行包已下载到 SDK 的 Debian 12 ARM64 包目录并核对 SHA-256。由于板端 Mosquitto 依赖 OpenSSL 3、而交叉工具链 sysroot 不含该 ABI，构建只从开发包提取 `mosquitto.h`，运行时通过 `dlopen("libmosquitto.so.1")` 使用板端库，不把板端 OpenSSL 混入旧工具链 sysroot。
+36. 独立 `parking_mqtt` 网络模块已实现：专用工作线程、固定容量发布 FIFO、非阻塞深拷贝入队、满队列显式拒绝、QoS 1 确认后出队、断线保留并重发队首、指数退避重连、retained online/offline、LWT、周期心跳、正常停止离线确认和统计/错误接口。3 组内存传输测试已通过宿主严格告警、ASan/UBSan、TSan 和 GCC `-fanalyzer`；模块、测试、真实 Broker 手工测试程序及正式 `parking` 已完成 RK3576 交叉编译。随后协议、内存传输测试和真实 Broker 正常连接路径均已在板端通过。
+37. 2026-10-14 用户在 RK3576 板端运行 `test_parking_protocol` 和 `test_parking_mqtt`，协议 8 组测试与 MQTT 内存传输 3 组测试全部通过。首次运行真实测试时把示例参数 `BROKER_IP` 原样传入，程序完成 5 次连接尝试后报告 `Lookup error`；这只证明无法解析占位主机名，不属于真实 Broker 验证，尚不能据此确认 online/offline、LWT、心跳或真实重连。
+38. 2026-10-14 用户以板端本机 Mosquitto `127.0.0.1:1883` 运行 20 秒真实测试，统计为连接尝试 1、成功连接 1、断线 1、心跳 10；独立订阅端完整收到 retained online、约 2 秒一次的 10 条 heartbeat 和正常退出 retained offline。由此确认板端动态加载、真实 Broker 正常连接、周期心跳和正常离线路径成功。
+39. 2026-10-14 用户再次启动 120 秒真实测试，并在收到 online 和 3 条 heartbeat 后对 PID 2268 执行 `SIGKILL`；客户端没有机会主动离线，但订阅端仍收到同一 session 的 retained offline，确认 Broker LWT 在 RK3576 真实路径生效。Broker 中断后的真实重连仍待验证。
+40. 2026-10-14 用户运行 40 秒真实测试，并在运行期间停止本机 Mosquitto 8 秒后重新启动；最终统计为连接尝试 6、成功连接 2、断线 2、心跳 13。客户端未提前退出，Broker 恢复后成功建立第二次连接并继续心跳，确认 RK3576 真实断线重连路径成功。
+41. MQTT 已非阻塞接入正式 `main.c`：新增 `parking_mqtt_reporter` 适配层，`--mqtt-host` 显式启用，默认关闭；支持 port、site/device、用户名、密码和 CA 参数。正式程序发布 retained status，并且只在 SQLite `complete_entry/exit` 成功和车位状态刷新后把 committed 车辆事件送入内存队列；队列满或网络失败只记录警告，不回滚数据库、不阻塞业务、不控制 Gate。新增同步内存桩组合测试，覆盖 LWT 配置、heartbeat 长度、status、entry/exit Topic/Payload 和队列满返回；宿主严格告警、ASan/UBSan、GCC `-fanalyzer` 与 RK3576 `parking`/测试交叉编译均已通过。
+42. 2026-10-14 用户在 RK3576 先运行 `test_parking_mqtt_reporter`，1 组组合测试通过；随后以本机 Broker、默认 dry-run Gate 和专用数据库运行正式入口 `parking`。订阅端收到新 session online、初始 idle/closed/100 可用 status、10 秒 heartbeat、入场检查后的 wait_passage/open/1 个 pending status、SQLite 提交后的 committed `events/entry`，以及 occupied=1/pending=0/available=99 的最终 idle status 和正常退出 offline。主程序统计为连接尝试 1、成功 1、断线 1、业务消息入队 4、确认 4、拒绝 0。由此确认正式 MQTT availability、heartbeat、status 和 entry 提交链路成功；同数据库 exit 事件尚待验证。
+43. 2026-10-14 用户继续使用同一专用数据库运行正式出口 `parking`。订阅端收到 exit session online、初始 occupied=1/available=99 status、wait_passage/open status、SQLite 提交后的 committed `events/exit`，以及 occupied=0/available=100 的最终 idle/closed status 和正常退出 offline；主程序统计仍为连接尝试 1、成功 1、断线 1、业务消息入队 4、确认 4、拒绝 0。正式 MQTT status、entry/exit 与车位恢复链路至此均已在板端通过。退出时发现 LVGL 9.6.0 canvas 析构把 `&canvas->draw_buf` 错传给图像缓存清理，打印两次 `invalid magic`；最小修正为 `canvas->draw_buf` 并重新交叉编译后，用户已确认板端退出复测成功。
 
-当前没有已知编译卡点。下一步进入 MQTT/JSON：先冻结 Topic 和 Payload，完成独立、可测试的协议编码模块，再接入带断线重连、心跳和 LWT 的 MQTT 工作线程。不要继续重写已经通过真机验证的 Camera、Recognizer、Gate、计费、SQLite、UI 和管线线程逻辑。
+当前没有已知编译卡点。MQTT 正式主程序入口和出口链路以及 LVGL 退出清理均已在 RK3576 通过；下一阶段是正式支付。不要继续重写已经通过真机验证的 Camera、Recognizer、Gate、计费、SQLite、UI 和管线线程逻辑。
 
 ## 2. 当前结论速览
 
@@ -100,8 +110,17 @@ parking_storage_lib + SQLite schema v1         已完成 RK3576 板端验证
 parking SQLite 检查/提交集成                   已完成 RK3576 板端验证
 parking_fee 按时长计费                         已完成 RK3576 板端验证
 SQLite 首次出场计费与金额冻结                  已完成 RK3576 板端验证
-LVGL / 原生 DRM/KMS                          独立测试已真机验证，正式 parking_ui 待板端验证
-MQTT、正式支付、OTA                            尚未实现
+LVGL / 原生 DRM/KMS                          独立测试和正式 parking_ui 均已板端显示成功
+MQTT/JSON Topic 与上行协议编码                已冻结并通过宿主/RK3576 构建验证
+MQTT 工作线程与 Mosquitto 动态后端              已实现并通过宿主/板端测试
+MQTT Broker 正常连接、心跳与正常离线             已完成 RK3576 板端验证
+MQTT Broker LWT                              已完成 RK3576 板端验证
+MQTT 真实重连                              已完成 RK3576 板端验证
+MQTT main.c 非阻塞集成                       已实现并完成 RK3576 交叉编译
+MQTT 正式主程序 status/entry 上报             已完成 RK3576 板端验证
+MQTT 正式主程序 exit 上报                     已完成 RK3576 板端验证
+LVGL canvas 退出清理修复                      已完成 RK3576 板端验证
+正式支付、OTA                               尚未实现
 ```
 
 有界 FIFO 的正常运行路径已经随正式 `parking` 主程序在板端回归成功，但没有专门制造 32 个事件积压，因此满队列溢出、丢弃统计和失败停止路径尚未真机验证。用户明确不需要为本次 FIFO 新增独立单元测试；不能把未执行的溢出测试写成已经通过。
@@ -349,10 +368,11 @@ parking_controller 状态机驱动
 SQLite 入/出场检查和完成提交
 按真实入场/出场时间计算费用并冻结待付金额
 模拟支付；Gate 默认 dry-run，可用 --enable-gate 启用真实 PWM
+--mqtt-host HOST 显式启用 MQTT，支持 port、site/device、认证和 CA
 绘制帧获取与 pipeline_frame_release
 ```
 
-`parking` 链接 `plate_pipeline_lib`、`parking_business_lib` 和 `parking_storage_lib`，并通过前者自动获得 `parking_lib`、`plate_recognizer_lib` 和 `Threads::Threads` 依赖。主程序不直接访问 Camera、Recognizer 或管线内部线程。入/出场检查、持久化 operation ID、停车会话提交和聚合车位统计已经使用 SQLite 事务；出口按停车时长计费，首次出场检查后冻结金额。支付仍为日志/dry-run；Gate 默认 dry-run，传入 `--enable-gate` 后直接使用已验证的 `pwmchip2/pwm0` 参数，不进行 `ENABLE` 交互确认。2026-09-22 用户确认正式主程序已在板端成功真实控制 Gate；正式支付、LVGL、MQTT 和 OTA 尚未接入。
+`parking` 链接 `plate_pipeline_lib`、`parking_business_lib`、`parking_storage_lib`、`parking_ui_lib` 和 `parking_mqtt_reporter_lib`。主程序不直接访问 Camera、Recognizer 或管线内部线程，网络 I/O 只在 MQTT 工作线程执行。入/出场检查、持久化 operation ID、停车会话提交和聚合车位统计已经使用 SQLite 事务；出口按停车时长计费，首次出场检查后冻结金额。支付仍为日志/dry-run；Gate 默认 dry-run，传入 `--enable-gate` 后直接使用已验证的 `pwmchip2/pwm0` 参数，不进行 `ENABLE` 交互确认。2026-09-22 用户确认正式主程序已在板端成功真实控制 Gate；MQTT 正式 status、entry 和 exit 已在板端验证，正式支付和 OTA 尚未接入。
 
 真实 Gate 模式下，`gate_create()` 会立即开始关闸，控制器先保持 `INITIALIZING`；主循环持续调用 `gate_update()`，只有观测到真实 `CLOSED` 后才进入 `IDLE`。业务开关闸命令不会立即伪造完成事件，只有实际状态到达 `OPEN/CLOSED` 后才向 `parking_controller` 回报；因此 SQLite 完成提交发生在真实关闸完成之后。Gate 更新或命令失败会发送 `PARKING_EVENT_GATE_FAILED` 并让业务进入错误路径。
 
@@ -532,6 +552,15 @@ cmake --build build-rk3576-release \
   --target test_parking_store \
   -j"$(nproc)"
 
+cmake --build build-rk3576-release \
+  --target test_parking_protocol \
+  -j"$(nproc)"
+
+cmake --build build-rk3576-release \
+  --target test_parking_mqtt test_parking_mqtt_live \
+           test_parking_mqtt_reporter \
+  -j"$(nproc)"
+
 ```
 
 正式 `parking` 现在默认构建并链接 LVGL/DRM；独立显示测试仍通过下面的选项启用：
@@ -550,7 +579,7 @@ cmake --build build-rk3576-lvgl \
 
 项目在 `third_party/lvgl` 自带精简的 LVGL v9.6.0 核心源码、公开头文件、CMake 支持文件和许可证，不再依赖构建目录或 `/tmp` 中的临时下载；仍可通过 `PARKING_LVGL_SOURCE_DIR` 指向其他 v9.6.0 源码。交叉构建会从 LubanCat SDK 自带的 ARM64 `libdrm-dev/libdrm2` 包提取头文件和链接库，不会错误链接宿主 x86_64 `libdrm`。
 
-截至 2026-09-21 已完成：
+截至 2026-10-13 已完成：
 
 - `plate_pipeline.c` RK3576 交叉编译；
 - `plate_pipeline.c` 从 `parking_lib` 拆入独立的 `plate_pipeline_lib`；
@@ -567,6 +596,10 @@ cmake --build build-rk3576-lvgl \
 - 产物确认为 ARM aarch64；
 - `plate_event_queue.c` 和 `plate_pipeline.c` 额外使用 `-Wall -Wextra -Wpedantic -Werror` 编译通过；
 - `parking_controller.c` 使用宿主和 RK3576 工具链的 `-Wall -Wextra -Wpedantic -Werror` 检查通过；
+- `parking_protocol.c` 已加入独立 `parking_protocol_lib`，8 组纯 C 协议测试通过宿主严格告警、ASan/UBSan 和 RK3576 交叉编译；
+- `parking_mqtt.c` 和 Mosquitto 动态后端已加入独立 `parking_mqtt_lib`；3 组内存传输测试通过宿主严格告警、ASan/UBSan、TSan、GCC `-fanalyzer` 和 RK3576 交叉编译；
+- `test_parking_mqtt_live` 已完成 RK3576 交叉编译，并在板端验证真实 Broker 正常连接、availability、心跳、LWT 和 Broker 中断后的重连；
+- `parking_mqtt_reporter` 已接入正式 `main.c`，同步内存桩组合测试通过宿主严格告警、ASan/UBSan、GCC `-fanalyzer` 和 RK3576 交叉编译；
 - `git diff --check` 通过；
 - 用户完成板端多线程识别回归；
 - 用户完成迁移后真实 Gate 回归；
@@ -587,7 +620,9 @@ lib/librknnrt.so
 
 新版本还要求板端系统动态库提供 `libsqlite3.so.0` 或 `libsqlite3.so`。当前 LubanCat GCC sysroot 没有 SQLite 开发包，因此 `parking_storage_lib` 在运行时通过 `dlopen` 加载板端 SQLite，不把宿主库错误链接进 ARM64 产物。数据库文件及其 `-wal`/`-shm` 同目录必须可写。
 
-六个测试程序只在回归对应测试时部署，不是运行 `parking` 的必需文件：
+独立 MQTT 模块运行时要求板端提供 `libmosquitto.so.1`。板端已安装 ARM64 Mosquitto 2.0.11；交叉构建从 `PARKING_MOSQUITTO_DEV_DEB` 指定的开发包提取公开头文件，但不直接链接 Mosquitto、OpenSSL 或 Crypto。正式 `parking` 已静态链接 MQTT 上报代码，但只有传入 `--mqtt-host` 时才会 `dlopen` Mosquitto；默认未启用 MQTT 时仍不要求运行时提供该库。
+
+十个测试程序只在回归对应测试时部署，不是运行 `parking` 的必需文件：
 
 ```text
 test_realtime_recognizer_threaded
@@ -595,10 +630,14 @@ test_realtime_plate_gate
 test_parking_plate_policy
 test_parking_fee
 test_parking_store
+test_parking_protocol
+test_parking_mqtt
+test_parking_mqtt_live
+test_parking_mqtt_reporter
 test_lvgl_display
 ```
 
-其中 `test_parking_plate_policy`、`test_parking_fee` 和 `test_parking_store` 不访问摄像头、NPU、Display 或 Gate，可直接在板端运行。`test_parking_store` 使用 `/tmp` 临时数据库并在结束时清理。`test_lvgl_display` 会独占 `/dev/dri/card0`，不能与 `parking`、fbdev 测试或其他显示程序同时运行；它不访问 Camera、NPU、SQLite 或 Gate。
+其中 `test_parking_plate_policy`、`test_parking_fee`、`test_parking_store`、`test_parking_protocol`、`test_parking_mqtt` 和 `test_parking_mqtt_reporter` 不访问摄像头、NPU、Display 或 Gate，可直接在板端运行。`test_parking_store` 使用 `/tmp` 临时数据库并在结束时清理。`test_parking_protocol` 不访问 Broker 或网络；两个 MQTT 自动测试使用内存传输替身。`test_parking_mqtt_live` 会连接显式指定的 Broker，但不访问 Camera、NPU、SQLite、Display 或 Gate。`test_lvgl_display` 会独占 `/dev/dri/card0`，不能与 `parking`、fbdev 测试或其他显示程序同时运行。
 
 识别目标通过 `$ORIGIN/lib` 使用部署目录里的 `librknnrt.so`。不要覆盖系统 `/lib/librknnrt.so`。
 
@@ -607,8 +646,8 @@ test_lvgl_display
 保存本文前确认：
 
 ```text
-branch: feature/lvgl
-HEAD:   1bc265a “ui初始化显示成功”
+branch: feature/mqtt
+HEAD:   3821ce6 “ui功能实现”
 ```
 
 写入本文后预期工作树：
@@ -616,19 +655,38 @@ HEAD:   1bc265a “ui初始化显示成功”
 ```text
  M HANDOFF.md
  M CMakeLists.txt
- M lv_conf.h
  M src/main.c
-?? include/parking_ui.h
-?? src/ui/parking_ui.c
+ M third_party/lvgl/src/widgets/canvas/lv_canvas.c
+?? docs/MQTT_PROTOCOL_V1.md
+?? include/parking_mqtt.h
+?? include/parking_mqtt_reporter.h
+?? include/parking_protocol.h
+?? src/network/parking_mqtt.c
+?? src/network/parking_mqtt_mosquitto.c
+?? src/network/parking_mqtt_reporter.c
+?? src/network/parking_mqtt_transport.h
+?? src/network/parking_protocol.c
+?? tests/test_parking_mqtt.c
+?? tests/test_parking_mqtt_live.c
+?? tests/test_parking_mqtt_reporter.c
+?? tests/test_parking_protocol.c
 ```
 
 具体含义：
 
-- `CMakeLists.txt`、`lv_conf.h`：正式目标默认构建 LVGL/DRM 和 canvas，并链接 `parking_ui_lib`；
-- `include/parking_ui.h`、`src/ui/parking_ui.c`：正式停车 UI、实时 BGR 画面缩放和状态快照呈现；
-- `src/main.c`：移除正式主程序的 `/dev/fb0` 路径，改由主线程驱动 `parking_ui`；
-- `HANDOFF.md`：记录正式 UI 实现、验证结果和板端待验证边界。
+- `docs/MQTT_PROTOCOL_V1.md`：冻结 Topic、QoS/Retain、Payload 和后续接入约束；
+- `include/parking_protocol.h`、`src/network/parking_protocol.c`：纯 C Topic/JSON 编码接口与实现；
+- `tests/test_parking_protocol.c`：协议、转义、非法输入和缓冲区测试；
+- `include/parking_mqtt.h`、`src/network/parking_mqtt*.c/.h`：MQTT 工作线程、发布队列和 Mosquitto 动态后端；
+- `tests/test_parking_mqtt.c`：不访问网络的线程、队列、重连和 QoS 1 重试测试；
+- `tests/test_parking_mqtt_live.c`：真实 Broker 手工测试；
+- `include/parking_mqtt_reporter.h`、`src/network/parking_mqtt_reporter.c`：正式程序 Topic、session、heartbeat、status 和 committed 车辆事件适配；
+- `tests/test_parking_mqtt_reporter.c`：不访问 Broker 的正式上报组合测试；
+- `CMakeLists.txt`：新增协议、MQTT 模块及对应测试目标；
+- `third_party/lvgl/src/widgets/canvas/lv_canvas.c`：修正 canvas 析构传给图像缓存的指针；
+- `HANDOFF.md`：记录协议、网络模块、依赖和待验证边界。
 
+`3821ce6` 已经提交正式 `parking_ui`、主程序集成及构建配置；不要把这些内容误判为当前未提交修改。
 `1bc265a` 已经提交了独立 LVGL/DRM 显示测试、zpos 修复及其构建接入；不要把这些已提交内容误判为缺失。
 `eede95c` 已经提交了正式 Gate、5 秒关闸超时、板端业务回归记录和项目开发约定。
 `5235b04` 已经提交了计费模块、SQLite 金额冻结及对应测试。
@@ -651,11 +709,7 @@ rm -rf build-rk3576-release
 
 ```bash
 git status --short
-git diff -- CMakeLists.txt HANDOFF.md include/parking_controller.h \
-  include/parking_plate_policy.h include/parking_store.h \
-  src/business/parking_controller.c src/business/parking_plate_policy.c \
-  src/storage/parking_store.c src/main.c \
-  tests/test_parking_plate_policy.c tests/test_parking_store.c
+git diff -- CMakeLists.txt HANDOFF.md
 ```
 
 并直接阅读当前正式接口、主程序和相关构建配置：
@@ -669,11 +723,21 @@ sed -n '1,320p' include/parking_controller.h
 sed -n '1,260p' include/parking_plate_policy.h
 sed -n '1,260p' include/parking_store.h
 sed -n '1,260p' include/parking_fee.h
+sed -n '1,260p' include/parking_protocol.h
+sed -n '1,280p' include/parking_mqtt.h
 sed -n '1,760p' src/business/parking_controller.c
 sed -n '1,360p' src/business/parking_plate_policy.c
 sed -n '1,360p' src/business/parking_fee.c
 sed -n '1,1200p' src/storage/parking_store.c
+sed -n '1,760p' src/network/parking_protocol.c
+sed -n '1,1200p' src/network/parking_mqtt.c
+sed -n '1,760p' src/network/parking_mqtt_mosquitto.c
+sed -n '1,260p' src/network/parking_mqtt_transport.h
 sed -n '1,900p' src/main.c
+sed -n '1,420p' tests/test_parking_protocol.c
+sed -n '1,760p' tests/test_parking_mqtt.c
+sed -n '1,520p' tests/test_parking_mqtt_live.c
+sed -n '1,260p' docs/MQTT_PROTOCOL_V1.md
 sed -n '1,260p' CMakeLists.txt
 ```
 
@@ -687,14 +751,15 @@ sed -n '1,260p' CMakeLists.txt
 4. 计费模块已经实现，但规则目前只在进程启动时使用默认值，尚无配置文件、后台下发或管理界面；支付仍是 dry-run。`parking_spaces` 当前只有全场总数/占用数，不是具体 A01/A02 车位分配；
 5. SQLite 未完成 operation 会跨重启保留并在同一车牌再次检查时复用，不会擅自推断车辆是否已经通过；当前尚无人工列出/取消长期遗留 operation 的管理接口，因此启动日志会显示未完成入场数量；
 6. 正式 `parking` 主程序入口、免费出场、收费出场和异常拒绝不开闸已提供完整板端日志并验证成功；Gate 故障路径尚未逐项验证；
-7. `parking` 主程序尚未单独确认 Ctrl+C 后的完整板端清理日志；
+7. `parking` 主程序 Ctrl+C 已确认 MQTT 正常离线、线程统计和 LVGL 无错误清理；
 8. 尚未实现摄像头断开重连、运行时重启和完整错误恢复；
 9. 管线对象 stop 后不能再次 start；
 10. 管线尚未提供查询 Camera 实际协商宽高/FPS/格式的接口；
 11. 正式 `parking` 主程序的具体 FPS、延迟、丢帧和温度没有记录；
 12. 当前 RKNN 推理无限速，芯片发热明显，但用户决定暂缓优化；
 13. 自动关闸无物理限位、地感、防砸或车辆通过反馈；
-14. 独立 LVGL DRM/KMS 测试已完成板端显示和 Ctrl+C 恢复验证；正式 `parking_ui` 也已在板端显示成功，但业务状态逐项变化与退出清理日志尚未单独确认。MQTT、正式支付和 OTA 尚未实现。
+14. 独立 LVGL DRM/KMS 测试已完成板端显示和 Ctrl+C 恢复验证；正式 `parking_ui` 的入口/出口业务状态刷新以及 canvas 退出清理修复也已完成板端验证；
+15. MQTT/JSON v1 Topic、上行编码、独立工作线程、有界发布队列、QoS 1 确认重试、重连退避、心跳、availability 和 LWT 已实现；宿主自动测试、RK3576 交叉编译、板端协议/内存测试以及真实 Broker 正常连接、心跳、正常离线、LWT 和真实重连均已通过。正式 `main.c` 已非阻塞接入 retained status 和 SQLite 提交后的车辆事件，status、entry 和 exit 均已在板端通过；内存队列满时会明确丢弃当前上报，持久化 outbox、正式支付和 OTA 尚未实现。
 
 ## 9. 下一步计划
 
@@ -877,25 +942,118 @@ tests/test_lvgl_display.c
 
 正式 `main.c` 已移除 `/dev/fb0` 的 `display_t`，改为显示实时识别画面以及入口/出口模式、车位统计、最近车牌与颜色、检测置信度、冻结费用、业务状态、真实/模拟 Gate 状态和拒绝原因。SQLite 检查与完成提交后会同步刷新车位统计；`parking_ui_process()` 与原业务循环在同一主线程运行。
 
-宿主车牌策略、9 组计费测试和 SQLite 存储测试全部通过；`parking_ui.c` 与 `main.c` 已通过 `-Wall -Wextra -Wpedantic -Werror`，正式 `parking` 和原硬件测试已完成 RK3576 交叉编译。2026-10-11 用户确认正式 UI 已在板端显示成功；尚未收到业务状态逐项变化、长时间刷新或退出清理的完整日志。
+宿主车牌策略、9 组计费测试和 SQLite 存储测试全部通过；`parking_ui.c` 与 `main.c` 已通过 `-Wall -Wextra -Wpedantic -Werror`，正式 `parking` 和原硬件测试已完成 RK3576 交叉编译。2026-10-14 入口和出口 MQTT 实机回归也覆盖了 UI 业务状态刷新。退出时 LVGL canvas 析构打印 `invalid magic`，根因是内置 LVGL 9.6.0 将 `&canvas->draw_buf` 错传给 `lv_image_cache_drop()`；改为 `canvas->draw_buf` 并重新交叉编译后，板端退出复测已确认成功。
 
-### 9.8 后续功能
+### 9.8 MQTT/JSON 协议 v1 已冻结
+
+新增文件：
+
+```text
+docs/MQTT_PROTOCOL_V1.md
+include/parking_protocol.h
+src/network/parking_protocol.c
+tests/test_parking_protocol.c
+```
+
+Topic 根路径为 `parking/v1/{site_id}/{device_id}`，已定义 availability、heartbeat、status、
+events/entry、events/exit，并为后续预留 commands/request 和 commands/reply。`site_id` 与
+`device_id` 只允许安全的单层 Topic 字符，不允许 `/`、`+`、`#`。
+
+上行 Payload 统一包含 schema version、message ID、Unix epoch 微秒、site/device/session ID；
+金额使用整数分。车辆事件只表示 SQLite operation 已经提交，MQTT 重试必须复用 message ID，
+后台需幂等处理。编码器不分配动态内存，会验证 UTF-8、转义 JSON 字符串、检查枚举和车位统计
+一致性，并在缓冲区不足时返回包含结尾 `\0` 的所需容量。
+
+宿主 `-Wall -Wextra -Wpedantic -Werror`、8 组测试、ASan/UBSan 和 RK3576 交叉编译均已通过；
+交叉产物确认为 ARM aarch64，8 组协议测试也已在板端通过。真实 Broker 正常连接、心跳和正常
+离线路径已验证。command Topic 只是保留命名，当前不能用于远程控制 Gate。
+
+### 9.9 MQTT 工作线程、LWT 与真实重连已验证
+
+新增文件：
+
+```text
+include/parking_mqtt.h
+include/parking_mqtt_reporter.h
+src/network/parking_mqtt_transport.h
+src/network/parking_mqtt.c
+src/network/parking_mqtt_mosquitto.c
+src/network/parking_mqtt_reporter.c
+tests/test_parking_mqtt.c
+tests/test_parking_mqtt_live.c
+tests/test_parking_mqtt_reporter.c
+```
+
+`parking_mqtt` 创建独立工作线程，业务线程只调用非阻塞 `parking_mqtt_publish()`。消息 Topic 和
+Payload 会复制到固定容量 FIFO；队列满时返回 `PARKING_MQTT_QUEUE_FULL`，不会覆盖或阻塞。
+QoS 1 队首只有收到 publish callback 后才出队，断线时保留并在重连后重发。心跳不积压旧消息，
+只在在线状态周期生成。连接成功先发布 retained online；正常停止尝试发布 retained offline，异常
+断线由 Broker 发布预先设置的 LWT。
+
+Mosquitto 后端通过 `dlopen("libmosquitto.so.1")` 和 `dlsym` 加载，不让 ARM64 OpenSSL 3 进入
+LubanCat GCC 10.3 sysroot。开发包默认路径为：
+
+```text
+/home/dyj/SDK/LubanCat_Linux_Generic_SDK_20260729/debian12/packages/arm64/mosquitto/
+```
+
+当前包版本为 2.0.11-1.2+deb12u2。`test_parking_mqtt` 的 3 组内存传输测试覆盖两次连接失败后的
+退避重连、online/offline、周期心跳、有界队列拒绝和断线后的 QoS 1 重发，已通过严格告警、
+ASan/UBSan、TSan 和 GCC `-fanalyzer`。`test_parking_mqtt_live` 使用真实动态后端，只发布
+availability 与 heartbeat，不订阅命令，也不访问任何硬件。
+
+下一步板端顺序：
+
+```bash
+./test_parking_protocol
+./test_parking_mqtt
+./test_parking_mqtt_live --host BROKER_IP --duration 20
+```
+
+2026-10-14 板端 `test_parking_protocol` 和 `test_parking_mqtt` 已通过。真实测试第一次误把示例
+`BROKER_IP` 当作实际参数，5 次连接均因 DNS `Lookup error` 失败；改用板端本机 Mosquitto
+`127.0.0.1:1883` 后，20 秒测试完成 1 次连接并发布 10 条 heartbeat，订阅端收到 retained
+online、全部 heartbeat 和正常退出 retained offline。offline Payload 在连接前与 LWT 一起
+生成，因此其中的时间戳接近 online；协议明确要求后台用接收时间记录实际掉线时刻。接下来需
+强制终止一次客户端确认 Broker 发布 LWT offline，并停止/恢复 Broker 验证真实重连。用户随后
+对已连接的 PID 2268 执行 `SIGKILL`，订阅端收到同一 session 的 retained offline，LWT 已验证；
+随后在 40 秒测试中停止本机 Mosquitto 8 秒再恢复，最终连接尝试 6、成功连接 2、断线 2、心跳
+13，真实重连也已验证。
+
+正式 `parking` 现在用 `--mqtt-host HOST` 显式启用上报，默认关闭。可选参数为
+`--mqtt-port`、`--mqtt-site`、`--mqtt-device`、`--mqtt-username`、`--mqtt-password` 和
+`--mqtt-ca-file`。`parking_mqtt_reporter` 生成 session、availability、10 秒 heartbeat 和 retained
+status；主线程只做编码与深拷贝入队。entry/exit 事件只在 SQLite 完成提交并刷新车位统计后入队，
+网络失败和队列满不会回滚数据库或阻塞 Gate。组合测试已验证 status、entry/exit Payload 和队列
+满返回；正式主程序已经 RK3576 交叉编译，status、committed entry/exit 和车位恢复均已在板端
+通过。
+
+### 9.10 后续功能
 
 建议顺序：
 
 ```text
 独立 LVGL DRM/KMS 显示已验证
     -> 正式 parking_ui 已在板端显示成功
-    -> MQTT/JSON
+    -> MQTT/JSON 协议 v1 已冻结
+    -> MQTT 工作线程已完成宿主测试与交叉编译
+    -> 板端真实 Broker、LWT 与重连已验证
+    -> 非阻塞接入正式 main.c 已实现并交叉编译
+    -> 板端正式 status 与 committed entry/exit 已验证
+    -> LVGL canvas 退出清理已完成板端复测
     -> 正式支付
     -> OTA
 ```
+
+下一步进入正式支付：先确定支付渠道与后台交互方式，再把当前立即成功的 dry-run 替换为独立、
+可超时和可恢复的支付适配层。网络 I/O 仍不进入主业务循环。车辆事件如需覆盖断电窗口，还要增加 SQLite outbox；
+不能把内存队列写成已经具备断电可靠性。
 
 正式主程序默认保持 dry-run。根据用户 2026-09-22 的明确要求，真实 PWM 通过 `--enable-gate` 启用后直接运行，不再要求人工输入 `ENABLE`；仍不能加入自动测试或默认启动路径。`test_realtime_plate_gate` 的原有人工确认保持不变。
 
 正式 UI 使用 LVGL；当前 `display.c` 保留为测试/诊断后端。LVGL DRM/KMS 工作后不要让两个显示后端同时运行。
 
-### 9.9 最后再处理性能与散热
+### 9.11 最后再处理性能与散热
 
 整个业务完成后，再考虑 `recognition_interval_ms`、温度监测、NPU 占用和散热优化。不能在没有用户新指示时改变当前无限速推理和 3 帧确认的响应特性。
 
@@ -995,7 +1153,7 @@ polarity=inversed
 
 ### 10.15 不要把规划或旧数据写成当前事实
 
-正式 `plate_pipeline`、独立 `plate_pipeline_lib`、稳定事件有界 FIFO、两个迁移后的硬件测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试、正式主程序的屏幕显示和稳定车牌日志、FIFO 正常路径、车牌策略测试、SQLite schema v1、按时长计费，以及同数据库入场—重启—出场链路均在板端成功。可以陈述这些正常路径事实，但不能把 FIFO 满队列、断电恢复、数据库损坏或并发故障路径写成已经验证，也不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。正式主程序 Gate、正式支付、LVGL、MQTT 和 OTA 尚未实现。
+正式 `plate_pipeline`、独立 `plate_pipeline_lib`、稳定事件有界 FIFO、两个迁移后的硬件测试和第一版 `parking` 主程序已经交叉编译。用户已确认多线程测试、真实 Gate 测试、正式主程序的屏幕显示和稳定车牌日志、FIFO 正常路径、车牌策略测试、SQLite schema v1、按时长计费，以及同数据库入场—重启—出场链路均在板端成功。可以陈述这些正常路径事实，但不能把 FIFO 满队列、断电恢复、数据库损坏或并发故障路径写成已经验证，也不能编造正式主程序未提供的 FPS、延迟、温度和丢帧数字。正式 Gate 和 LVGL UI 已实现并完成正常路径板端验证；MQTT/JSON 协议和网络工作线程已完成宿主测试、交叉编译、板端自动测试、真实 Broker 正常连接、LWT 及真实重连验证，正式 `main.c` 的 status 和 committed entry/exit 已在板端通过，LVGL canvas 退出清理修复也已完成板端复测；正式支付和 OTA 尚未实现。
 
 ### 10.16 不要擅自给 RKNN 限速
 
@@ -1034,12 +1192,12 @@ if (result == PLATE_PIPELINE_CLOSED)
 
 1. 完整阅读本文；
 2. 执行 `git status --short`，不清理任何修改；
-3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`include/parking_controller.h`、`src/business/parking_controller.c`、`include/parking_plate_policy.h`、`src/business/parking_plate_policy.c`、`include/parking_fee.h`、`src/business/parking_fee.c`、`include/parking_store.h`、`src/storage/parking_store.c`、`src/main.c` 和 `CMakeLists.txt`；
+3. 阅读 `include/plate_pipeline.h`、`src/pipeline/plate_event_queue.h/.c`、`src/pipeline/plate_pipeline.c`、`include/parking_controller.h`、`src/business/parking_controller.c`、`include/parking_plate_policy.h`、`src/business/parking_plate_policy.c`、`include/parking_fee.h`、`src/business/parking_fee.c`、`include/parking_store.h`、`src/storage/parking_store.c`、`include/parking_protocol.h`、`src/network/parking_protocol.c`、`include/parking_mqtt.h`、`include/parking_mqtt_reporter.h`、`src/network/parking_mqtt*.c/.h`、三个 MQTT 测试、`docs/MQTT_PROTOCOL_V1.md`、`src/main.c` 和 `CMakeLists.txt`；
 4. 阅读两个迁移后的测试，理解 Display 和 Gate 仍属于主线程/业务层；
-5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、第一版正式 `parking` 主程序、FIFO 正常路径、入口/出口全 dry-run、车牌策略、SQLite v1、按时长计费和同数据库入场—重启—出场链路都已经板端成功；正式主程序入口、免费出场、收费出场和异常拒绝不开闸也已有完整板端日志并验证成功；满队列溢出、断电恢复和数据库故障路径尚未专门验证；
+5. 承认当前真实状态：正式管线、多线程识别、受控真实 Gate 测试、正式 `parking` 主程序、FIFO 正常路径、车牌策略、SQLite v1、按时长计费、正式 LVGL UI 和真实 Gate 正常业务链路都已经板端成功；MQTT/JSON v1 协议、内存传输测试、真实 Broker 正常连接路径、LWT 及真实重连已在 RK3576 通过，正式 `main.c` 的 status 和 committed entry/exit、LVGL canvas 退出清理修复均已在板端通过；满队列溢出、断电恢复和数据库故障路径尚未专门验证；
 6. 不要把 `src/main.c` 恢复成占位程序，也不要重新复制 Camera、Recognizer 或管线线程逻辑；
 7. 不要重新从摄像头、MIPI、RKNN 或 PWM 是否存在开始排查，除非硬件环境发生变化；
-8. 默认下一步是板端验证正式 `parking_ui`，先保持 Gate dry-run；通过后再由用户决定是否回归 `--enable-gate` 真实 PWM；
+8. 默认下一步是正式支付；先确认支付渠道与后台交互方式，不能启用远程 Gate 命令；
 9. 修改前说明文件范围；
 10. 不运行真实 Gate 自动测试，不把真实 Gate 默认接入主程序；
 11. 不擅自处理 RKNN 发热或改变推理频率；
