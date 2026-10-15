@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="智慧停车场只读运行总览">
+    <title>泊云 · 停车场管理台</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/" aria-label="返回总览">
+                <span class="brand-mark" aria-hidden="true">P</span>
+                <span>
+                    <strong>泊云</strong>
+                    <small>PARKING OPS</small>
+                </span>
+            </a>
+            <div class="live-state">
+                <span id="live-dot" class="live-dot"></span>
+                <span id="live-label">正在连接实时数据</span>
+            </div>
+        </header>
+
+        <main>
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">运营态势 · READ ONLY</p>
+                    <h1>停车场运行总览</h1>
+                    <p class="hero-copy">集中查看车位、终端状态与车辆进出记录。</p>
+                </div>
+                <div class="clock-card">
+                    <span>当前时间</span>
+                    <strong id="clock">--:--:--</strong>
+                    <small id="today">----</small>
+                </div>
+            </section>
+
+            <section class="metric-grid" aria-label="停车场指标">
+                <article class="metric-card metric-primary">
+                    <span class="metric-label">可用车位</span>
+                    <div><strong id="available-spaces">--</strong><small> 个</small></div>
+                    <p>实时可接待容量</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-label">已占用</span>
+                    <div><strong id="occupied-spaces">--</strong><small> 个</small></div>
+                    <p id="occupancy-rate">占用率 --</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-label">今日入场</span>
+                    <div><strong id="today-entries">--</strong><small> 辆</small></div>
+                    <p>已提交入场记录</p>
+                </article>
+                <article class="metric-card">
+                    <span class="metric-label">今日出场</span>
+                    <div><strong id="today-exits">--</strong><small> 辆</small></div>
+                    <p>已提交出场记录</p>
+                </article>
+            </section>
+
+            <section class="content-grid">
+                <article class="panel device-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="eyebrow">EDGE DEVICES</p>
+                            <h2>终端状态</h2>
+                        </div>
+                        <span id="device-summary" class="summary-pill">0 / 0 在线</span>
+                    </div>
+                    <div id="device-list" class="device-list">
+                        <div class="empty-state">等待终端上报状态…</div>
+                    </div>
+                </article>
+
+                <article class="panel event-panel">
+                    <div class="panel-heading event-heading">
+                        <div>
+                            <p class="eyebrow">COMMITTED EVENTS</p>
+                            <h2>车辆进出记录</h2>
+                        </div>
+                        <span id="event-total" class="summary-pill">0 条记录</span>
+                    </div>
+
+                    <form id="event-filter" class="filter-bar">
+                        <label>
+                            <span>车牌号码</span>
+                            <input id="filter-plate" name="plate" placeholder="例如：浙A66666">
+                        </label>
+                        <label>
+                            <span>类型</span>
+                            <select id="filter-type" name="event_type">
+                                <option value="">全部</option>
+                                <option value="entry">入场</option>
+                                <option value="exit">出场</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>开始日期</span>
+                            <input id="filter-from" name="date_from" type="date">
+                        </label>
+                        <label>
+                            <span>结束日期</span>
+                            <input id="filter-to" name="date_to" type="date">
+                        </label>
+                        <button type="submit">查询</button>
+                        <button id="filter-reset" class="button-secondary" type="button">重置</button>
+                    </form>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>类型</th>
+                                    <th>车牌</th>
+                                    <th>颜色</th>
+                                    <th>费用</th>
+                                    <th>终端</th>
+                                </tr>
+                            </thead>
+                            <tbody id="event-rows">
+                                <tr><td colspan="6" class="empty-cell">暂无车辆事件</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </article>
+            </section>
+        </main>
+
+        <footer>
+            <span>Parking Management Console · v1</span>
+            <span>只读模式，不提供远程闸门控制</span>
+        </footer>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+</body>
+</html>

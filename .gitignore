@@ -66,3 +66,10 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Python backend local state
+backend/.venv/
+backend/data/
+__pycache__/
+.pytest_cache/
+*.pyc
