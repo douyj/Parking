@@ -247,6 +247,29 @@ target_compile_options(parking_mqtt_reporter_lib
         -Werror
 )
 
+# HTTP 模拟支付客户端在独立线程创建订单并轮询结果，不阻塞识别主循环。
+add_library(parking_payment_lib STATIC
+    src/network/parking_payment.c
+)
+
+target_include_directories(parking_payment_lib
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(parking_payment_lib
+    PUBLIC
+        Threads::Threads
+)
+
+target_compile_options(parking_payment_lib
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+)
+
 # 正式 LVGL/DRM 停车界面，由主线程驱动，不直接访问业务或硬件模块。
 add_library(parking_ui_lib STATIC
     src/ui/parking_ui.c
@@ -323,6 +346,7 @@ target_link_libraries(parking
         parking_business_lib
         parking_storage_lib
         parking_mqtt_reporter_lib
+        parking_payment_lib
         parking_ui_lib
 )
 
@@ -454,6 +478,24 @@ target_compile_options(test_parking_mqtt
 # 真实 Broker 手工测试，不注册到 CTest，也不访问 Camera、Gate 或数据库。
 add_executable(test_parking_mqtt_live
     tests/test_parking_mqtt_live.c
+)
+
+# HTTP 模拟支付手工联调，不注册到 CTest，也不访问 Camera 或 Gate。
+add_executable(test_parking_payment_live
+    tests/test_parking_payment_live.c
+)
+
+target_link_libraries(test_parking_payment_live
+    PRIVATE
+        parking_payment_lib
+)
+
+target_compile_options(test_parking_payment_live
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
 )
 
 target_link_libraries(test_parking_mqtt_live

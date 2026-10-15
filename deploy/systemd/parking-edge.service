@@ -1,0 +1,17 @@
+[Unit]
+Description=RK3576 Parking Exit Application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/test/parking
+ExecStart=/root/test/parking/parking --lane-mode exit --database /root/test/parking/parking.db --mqtt-host 172.20.10.2 --mqtt-port 1883 --mqtt-site parking-test --mqtt-device rk3576 --payment-base-url http://172.20.10.2:8000
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

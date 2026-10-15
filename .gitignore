@@ -70,6 +70,7 @@ Thumbs.db
 # Python backend local state
 backend/.venv/
 backend/data/
+backend/backups/
 __pycache__/
 .pytest_cache/
 *.pyc

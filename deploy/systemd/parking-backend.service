@@ -1,0 +1,20 @@
+[Unit]
+Description=Parking FastAPI Backend
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dyj
+Group=dyj
+WorkingDirectory=/home/dyj/project/Parking/backend
+EnvironmentFile=-/etc/parking/backend.env
+ExecStart=/home/dyj/project/Parking/backend/.venv/bin/uvicorn app.main:app --host 172.20.10.2 --port 8000 --timeout-graceful-shutdown 5
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

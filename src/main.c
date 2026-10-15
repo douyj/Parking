@@ -3,6 +3,7 @@
 #include "parking_controller.h"
 #include "parking_fee.h"
 #include "parking_mqtt_reporter.h"
+#include "parking_payment.h"
 #include "parking_store.h"
 #include "parking_ui.h"
 #include "plate_pipeline.h"
@@ -33,6 +34,7 @@
 #define DEFAULT_MQTT_SITE_ID     "parking"
 #define DEFAULT_MQTT_DEVICE_ID   "rk3576"
 #define MQTT_STATUS_RETRY_US     1000000ULL
+#define HTTP_PAYMENT_TIMEOUT_US 120000000ULL
 
 #define GATE_PWMCHIP_PATH       "/sys/class/pwm/pwmchip2"
 #define GATE_PWM_CHANNEL        0U
@@ -57,6 +59,7 @@ typedef struct {
     const char *mqtt_username;
     const char *mqtt_password;
     const char *mqtt_ca_file;
+    const char *payment_base_url;
 } parking_options_t;
 
 typedef struct {
@@ -66,6 +69,7 @@ typedef struct {
     parking_ui_t *ui;
     gate_t *gate;
     parking_mqtt_reporter_t *mqtt;
+    parking_payment_t *payment;
     gate_state_t observed_gate_state;
     parking_store_status_t store_status;
     parking_mqtt_reporter_status_t mqtt_status;
@@ -73,6 +77,8 @@ typedef struct {
     char last_plate[PARKING_PLATE_CAPACITY];
     char last_plate_color[32];
     char active_plate_color[32];
+    char payment_url[PARKING_PAYMENT_URL_CAPACITY];
+    char payment_error[PARKING_PAYMENT_ERROR_CAPACITY];
     float last_confidence;
     uint64_t amount_cents;
     uint64_t mqtt_status_retry_at_us;
@@ -124,7 +130,8 @@ static void print_usage(const char *program)
             "  --mqtt-device ID      设备 ID，默认 rk3576\n"
             "  --mqtt-username USER  可选用户名\n"
             "  --mqtt-password PASS  可选密码\n"
-            "  --mqtt-ca-file PATH   可选 CA 文件\n",
+            "  --mqtt-ca-file PATH   可选 CA 文件\n"
+            "  --payment-base-url URL  HTTP 模拟支付后台地址\n",
             program != NULL ? program : "parking");
 }
 
@@ -212,6 +219,8 @@ static int parse_arguments(int argc, char **argv, parking_options_t *options)
             string_value = &options->mqtt_password;
         else if (strcmp(argv[i], "--mqtt-ca-file") == 0)
             string_value = &options->mqtt_ca_file;
+        else if (strcmp(argv[i], "--payment-base-url") == 0)
+            string_value = &options->payment_base_url;
 
         if (string_value != NULL) {
             if (++i >= argc || argv[i][0] == '\0') {
@@ -623,6 +632,7 @@ static int update_parking_ui(parking_demo_t *demo)
     status.plate_color = demo->last_plate_color;
     status.confidence = demo->last_confidence;
     status.amount_cents = demo->amount_cents;
+    status.payment_url = demo->payment_url;
     status.total_spaces = demo->store_status.total_spaces;
     status.occupied_spaces = demo->store_status.occupied_spaces;
     status.available_spaces = demo->store_status.available_spaces;
@@ -770,9 +780,29 @@ static int execute_demo_commands(parking_demo_t *demo,
             }
 
             case PARKING_COMMAND_REQUEST_PAYMENT:
-                LOG_INFO("[DRY-RUN] 模拟支付成功: %s, 金额=%" PRIu64 " 分",
-                         command->plate_number, command->amount_cents);
-                response.type = PARKING_EVENT_PAYMENT_SUCCEEDED;
+                if (demo->payment == NULL) {
+                    LOG_INFO("[DRY-RUN] 模拟支付成功: %s, 金额=%" PRIu64
+                             " 分", command->plate_number,
+                             command->amount_cents);
+                    response.type = PARKING_EVENT_PAYMENT_SUCCEEDED;
+                    break;
+                }
+
+                demo->payment_url[0] = '\0';
+                demo->payment_error[0] = '\0';
+                if (parking_payment_request(
+                        demo->payment, command->operation_id,
+                        command->plate_number, command->amount_cents) != 0) {
+                    LOG_ERROR("创建 HTTP 模拟支付请求失败: %s",
+                              command->plate_number);
+                    response.type = PARKING_EVENT_PAYMENT_FAILED;
+                    break;
+                }
+                LOG_INFO("等待 HTTP 模拟支付: %s, operation_id=%" PRIu64
+                         ", 金额=%" PRIu64 " 分",
+                         command->plate_number, command->operation_id,
+                         command->amount_cents);
+                has_response = 0;
                 break;
 
             case PARKING_COMMAND_OPEN_GATE:
@@ -938,6 +968,59 @@ static int dispatch_demo_event(parking_demo_t *demo,
                                  event->occurred_at_us, depth);
 }
 
+static int update_http_payment(parking_demo_t *demo)
+{
+    parking_payment_snapshot_t snapshot;
+    parking_event_t event;
+    parking_state_t business_state;
+    uint64_t now_us;
+
+    if (demo == NULL || demo->payment == NULL)
+        return 0;
+    if (parking_payment_get_snapshot(demo->payment, &snapshot) != 0)
+        return -1;
+
+    business_state = parking_controller_state(demo->controller);
+    if (business_state != PARKING_STATE_WAIT_PAYMENT) {
+        if (snapshot.state != PARKING_PAYMENT_IDLE)
+            parking_payment_reset(demo->payment);
+        demo->payment_url[0] = '\0';
+        demo->payment_error[0] = '\0';
+        return 0;
+    }
+
+    if (snapshot.payment_url[0] != '\0' &&
+        strcmp(snapshot.payment_url, demo->payment_url) != 0) {
+        snprintf(demo->payment_url, sizeof(demo->payment_url), "%s",
+                 snapshot.payment_url);
+        LOG_INFO("HTTP 模拟支付二维码已生成: %s", demo->payment_url);
+    }
+    if (snapshot.last_error[0] != '\0' &&
+        strcmp(snapshot.last_error, demo->payment_error) != 0) {
+        snprintf(demo->payment_error, sizeof(demo->payment_error), "%s",
+                 snapshot.last_error);
+        LOG_WARN("HTTP 模拟支付暂时不可用，将自动重试: %s",
+                 demo->payment_error);
+    }
+    if (snapshot.state != PARKING_PAYMENT_PAID &&
+        snapshot.state != PARKING_PAYMENT_FAILED)
+        return 0;
+
+    if (monotonic_us(&now_us) != 0)
+        return -1;
+    memset(&event, 0, sizeof(event));
+    event.occurred_at_us = now_us;
+    event.type = snapshot.state == PARKING_PAYMENT_PAID
+        ? PARKING_EVENT_PAYMENT_SUCCEEDED : PARKING_EVENT_PAYMENT_FAILED;
+    LOG_INFO("HTTP 模拟支付结果: operation_id=%" PRIu64 ", state=%s",
+             snapshot.operation_id,
+             parking_payment_state_name(snapshot.state));
+    parking_payment_reset(demo->payment);
+    demo->payment_url[0] = '\0';
+    demo->payment_error[0] = '\0';
+    return dispatch_demo_event(demo, &event, 0);
+}
+
 static int process_plate_events(plate_pipeline_t *pipeline,
                                 parking_demo_t *demo)
 {
@@ -1027,6 +1110,9 @@ static int run_loop(plate_pipeline_t *pipeline, parking_demo_t *demo)
         if (update_real_gate(demo) != 0)
             return -1;
 
+        if (update_http_payment(demo) != 0)
+            return -1;
+
         if (process_plate_events(pipeline, demo) != 0)
             return -1;
 
@@ -1077,6 +1163,7 @@ int main(int argc, char **argv)
     parking_store_status_t store_status;
     parking_ui_config_t ui_config;
     parking_mqtt_reporter_config_t mqtt_config;
+    parking_payment_config_t payment_config;
     parking_mqtt_stats_t mqtt_stats;
     parking_options_t options;
     parking_demo_t demo;
@@ -1087,6 +1174,7 @@ int main(int argc, char **argv)
     parking_ui_t *ui = NULL;
     gate_t *gate = NULL;
     parking_mqtt_reporter_t *mqtt = NULL;
+    parking_payment_t *payment = NULL;
     int argument_result;
     int exit_code = 1;
 
@@ -1103,6 +1191,8 @@ int main(int argc, char **argv)
     memset(&controller_config, 0, sizeof(controller_config));
     controller_config.mode = options.lane_mode;
     controller_config.gate_initially_closed = options.enable_gate ? 0 : 1;
+    if (options.payment_base_url != NULL)
+        controller_config.payment_timeout_us = HTTP_PAYMENT_TIMEOUT_US;
 
     controller = parking_controller_create(&controller_config);
     if (controller == NULL)
@@ -1143,6 +1233,20 @@ int main(int argc, char **argv)
     demo.store = store;
     demo.enable_gate = options.enable_gate;
     demo.store_status = store_status;
+
+    if (options.payment_base_url != NULL) {
+        memset(&payment_config, 0, sizeof(payment_config));
+        payment_config.base_url = options.payment_base_url;
+        payment_config.site_id = options.mqtt_site_id;
+        payment_config.device_id = options.mqtt_device_id;
+        payment = parking_payment_create(&payment_config);
+        if (payment == NULL || parking_payment_start(payment) != 0) {
+            LOG_ERROR("启动 HTTP 模拟支付模块失败: %s",
+                      options.payment_base_url);
+            goto cleanup;
+        }
+        demo.payment = payment;
+    }
 
     memset(&ui_config, 0, sizeof(ui_config));
     ui_config.device = DRM_DEVICE;
@@ -1225,11 +1329,12 @@ int main(int argc, char **argv)
 
     LOG_INFO("Parking 主程序启动，车道模式=%s，SQLite=%s，"
              "可用车位=%u/%u，未完成入场=%u，"
-             "支付=DRY-RUN，Gate=%s，MQTT=%s，按 Ctrl+C 退出",
+             "支付=%s，Gate=%s，MQTT=%s，按 Ctrl+C 退出",
              lane_mode_name(options.lane_mode), options.database_path,
              store_status.available_spaces,
              store_status.total_spaces,
              store_status.pending_entry_operations,
+             payment != NULL ? "HTTP-DEMO" : "DRY-RUN",
              options.enable_gate ? "REAL" : "DRY-RUN",
              mqtt != NULL ? options.mqtt_host : "DISABLED");
 
@@ -1237,6 +1342,7 @@ int main(int argc, char **argv)
         exit_code = 0;
 
 cleanup:
+    parking_payment_stop(payment);
     plate_pipeline_stop(pipeline);
     plate_pipeline_destroy(pipeline);
     parking_mqtt_reporter_stop(mqtt);
@@ -1256,6 +1362,7 @@ cleanup:
                  mqtt_stats.rejected_messages);
     }
     parking_mqtt_reporter_destroy(mqtt);
+    parking_payment_destroy(payment);
     parking_ui_destroy(ui);
     parking_store_close(store);
     parking_fee_destroy(fee);

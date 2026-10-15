@@ -29,6 +29,7 @@ typedef struct {
     const char *plate_color;
     float confidence;
     uint64_t amount_cents;
+    const char *payment_url;
 
     uint32_t total_spaces;
     uint32_t occupied_spaces;

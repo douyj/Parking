@@ -110,3 +110,50 @@ def test_overview_uses_one_latest_snapshot_per_site(tmp_path) -> None:
     assert result["device_count"] == 2
     assert result["site_count"] == 1
     assert result["spaces"]["occupied"] == 21
+
+
+def test_payment_lifecycle_is_idempotent_and_can_expire(tmp_path) -> None:
+    database = Database(tmp_path / "backend.db")
+    database.initialize()
+
+    payment = database.create_payment(
+        token="payment-token-0001",
+        site_id="lot-a",
+        device_id="gate01",
+        operation_id=7,
+        plate_number="浙A66666",
+        amount_cents=50,
+        now_us=1_000_000,
+        ttl_seconds=120,
+    )
+    duplicate = database.create_payment(
+        token="payment-token-ignored",
+        site_id="lot-a",
+        device_id="gate01",
+        operation_id=7,
+        plate_number="浙A66666",
+        amount_cents=50,
+        now_us=2_000_000,
+        ttl_seconds=120,
+    )
+    assert payment["status"] == "pending"
+    assert duplicate["token"] == payment["token"]
+
+    paid = database.pay(payment["token"], 3_000_000)
+    assert paid is not None
+    assert paid["status"] == "paid"
+    assert database.pay(payment["token"], 4_000_000)["status"] == "paid"
+
+    expiring = database.create_payment(
+        token="payment-token-0002",
+        site_id="lot-a",
+        device_id="gate01",
+        operation_id=8,
+        plate_number="浙A88888",
+        amount_cents=100,
+        now_us=5_000_000,
+        ttl_seconds=30,
+    )
+    expired = database.get_payment(expiring["token"], 35_000_000)
+    assert expired is not None
+    assert expired["status"] == "expired"

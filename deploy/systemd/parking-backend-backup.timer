@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Parking Backend SQLite Backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

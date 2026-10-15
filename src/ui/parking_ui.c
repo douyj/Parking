@@ -12,11 +12,16 @@
 #define CAMERA_HEIGHT 360
 #define UI_PLATE_CAPACITY 32U
 #define UI_COLOR_CAPACITY 32U
+#define UI_PAYMENT_URL_CAPACITY 512U
 
 struct parking_ui {
     lv_display_t *display;
     lv_obj_t *screen;
     lv_obj_t *camera_canvas;
+    lv_obj_t *payment_panel;
+    lv_obj_t *payment_qrcode;
+    lv_obj_t *payment_title;
+    lv_obj_t *payment_hint;
     lv_obj_t *mode_label;
     lv_obj_t *space_label;
     lv_obj_t *plate_label;
@@ -30,6 +35,7 @@ struct parking_ui {
     int lvgl_initialized;
     char plate_number[UI_PLATE_CAPACITY];
     char plate_color[UI_COLOR_CAPACITY];
+    char payment_url[UI_PAYMENT_URL_CAPACITY];
 };
 
 static void print_lvgl_log(lv_log_level_t level, const char *message)
@@ -140,6 +146,42 @@ static int create_screen(parking_ui_t *ui)
                          CAMERA_WIDTH, CAMERA_HEIGHT,
                          LV_COLOR_FORMAT_XRGB8888);
     lv_obj_center(ui->camera_canvas);
+
+    ui->payment_panel = lv_obj_create(camera_card);
+    if (ui->payment_panel == NULL)
+        return -1;
+    lv_obj_set_size(ui->payment_panel, CAMERA_WIDTH, CAMERA_HEIGHT);
+    lv_obj_center(ui->payment_panel);
+    lv_obj_set_style_bg_color(ui->payment_panel,
+                              lv_color_hex(0x0F172A), 0);
+    lv_obj_set_style_bg_opa(ui->payment_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ui->payment_panel, 0, 0);
+    lv_obj_set_style_radius(ui->payment_panel, 8, 0);
+    lv_obj_set_scrollable(ui->payment_panel, false);
+
+    ui->payment_qrcode = lv_qrcode_create(ui->payment_panel);
+    if (ui->payment_qrcode == NULL)
+        return -1;
+    lv_qrcode_set_size(ui->payment_qrcode, 250);
+    lv_qrcode_set_dark_color(ui->payment_qrcode, lv_color_hex(0x102A43));
+    lv_qrcode_set_light_color(ui->payment_qrcode, lv_color_hex(0xFFFFFF));
+    lv_qrcode_set_quiet_zone(ui->payment_qrcode, true);
+    lv_obj_align(ui->payment_qrcode, LV_ALIGN_LEFT_MID, 28, 0);
+
+    ui->payment_title = create_label(ui->payment_panel, ui->font,
+                                     "正在生成支付二维码", 0xF8FAFC);
+    lv_obj_set_width(ui->payment_title, 300);
+    lv_label_set_long_mode(ui->payment_title, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_align(ui->payment_title, LV_ALIGN_TOP_RIGHT, -18, 78);
+
+    ui->payment_hint = create_label(ui->payment_panel, ui->font,
+                                    "请使用手机扫码完成模拟支付",
+                                    0x94A3B8);
+    lv_obj_set_width(ui->payment_hint, 300);
+    lv_label_set_long_mode(ui->payment_hint, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_align(ui->payment_hint, LV_ALIGN_TOP_RIGHT, -18, 138);
+    lv_obj_set_hidden(ui->payment_qrcode, true);
+    lv_obj_set_hidden(ui->payment_panel, true);
 
     status_card = create_card(ui->screen, 700, 68, 300, 390);
     label = create_label(status_card, ui->font, "停车场状态", 0x94A3B8);
@@ -451,6 +493,35 @@ int parking_ui_set_status(parking_ui_t *ui,
              status->gate_is_real ? "" : "（模拟）");
     set_label_text(ui->gate_label, buffer);
     set_label_text(ui->message_label, message_text(status));
+
+    if (status->business_state == PARKING_STATE_WAIT_PAYMENT) {
+        const char *payment_url = status->payment_url != NULL
+            ? status->payment_url : "";
+
+        lv_obj_set_hidden(ui->payment_panel, false);
+        if (payment_url[0] == '\0') {
+            set_label_text(ui->payment_title, "正在生成支付二维码");
+            set_label_text(ui->payment_hint, "请稍候…");
+            lv_obj_set_hidden(ui->payment_qrcode, true);
+        } else {
+            if (strcmp(payment_url, ui->payment_url) != 0) {
+                if (strlen(payment_url) >= sizeof(ui->payment_url) ||
+                    lv_qrcode_update(ui->payment_qrcode, payment_url,
+                                     (uint32_t)strlen(payment_url)) !=
+                        LV_RESULT_OK)
+                    return -1;
+                memcpy(ui->payment_url, payment_url,
+                       strlen(payment_url) + 1U);
+            }
+            set_label_text(ui->payment_title, "扫码支付停车费");
+            set_label_text(ui->payment_hint,
+                           "手机确认后，道闸将自动继续流程");
+            lv_obj_set_hidden(ui->payment_qrcode, false);
+        }
+    } else {
+        ui->payment_url[0] = '\0';
+        lv_obj_set_hidden(ui->payment_panel, true);
+    }
     return 0;
 }
 

@@ -58,3 +58,35 @@ def test_read_only_api_and_static_page(tmp_path) -> None:
         page = client.get("/")
         assert page.status_code == 200
         assert "停车场运行总览" in page.text
+
+
+def test_http_demo_payment_flow(tmp_path) -> None:
+    app = create_app(settings(tmp_path / "payment.db"), start_mqtt=False)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/payments",
+            json={
+                "site_id": "lot-a",
+                "device_id": "gate01",
+                "operation_id": 9,
+                "plate_number": "浙A66666",
+                "amount_cents": 50,
+            },
+        )
+        assert created.status_code == 200
+        payment = created.json()
+        assert payment["status"] == "pending"
+        assert payment["pay_url"].endswith(f'/pay/{payment["token"]}')
+
+        page = client.get(f'/pay/{payment["token"]}')
+        assert page.status_code == 200
+        assert "确认模拟支付" in page.text
+        assert "浙A66666" in page.text
+
+        confirmed = client.post(f'/pay/{payment["token"]}/confirm')
+        assert confirmed.status_code == 200
+        assert "支付成功" in confirmed.text
+
+        status = client.get(f'/api/payments/{payment["token"]}')
+        assert status.status_code == 200
+        assert status.json()["status"] == "paid"

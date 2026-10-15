@@ -33,6 +33,8 @@ class Settings:
     mqtt_topic: str
     mqtt_client_id: str
     timezone: str
+    public_base_url: str | None = None
+    payment_ttl_seconds: int = 120
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -63,4 +65,11 @@ class Settings:
                 "PARKING_BACKEND_MQTT_CLIENT_ID", "parking-web-backend"
             ),
             timezone=os.getenv("PARKING_TIMEZONE", "Asia/Shanghai"),
+            public_base_url=(
+                os.getenv("PARKING_PUBLIC_BASE_URL", "").strip().rstrip("/")
+                or None
+            ),
+            payment_ttl_seconds=_env_int(
+                "PARKING_PAYMENT_TTL_SECONDS", 120, 30, 600
+            ),
         )

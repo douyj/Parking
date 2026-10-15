@@ -84,6 +84,23 @@ ON vehicle_events(received_at_us DESC);
 
 CREATE INDEX IF NOT EXISTS idx_vehicle_events_plate
 ON vehicle_events(plate_number, received_at_us DESC);
+
+CREATE TABLE IF NOT EXISTS payments (
+    token TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    operation_id INTEGER NOT NULL,
+    plate_number TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'paid', 'expired')),
+    created_at_us INTEGER NOT NULL,
+    expires_at_us INTEGER NOT NULL,
+    paid_at_us INTEGER,
+    UNIQUE(site_id, device_id, operation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_status
+ON payments(status, created_at_us DESC);
 """
 
 
@@ -116,8 +133,12 @@ class Database:
             version = connection.execute(
                 "SELECT version FROM schema_version WHERE id = 1"
             ).fetchone()
-            if version is None or version["version"] != 1:
+            if version is None or version["version"] not in (1, 2):
                 raise RuntimeError("不支持的后台数据库 schema 版本")
+            if version["version"] == 1:
+                connection.execute(
+                    "UPDATE schema_version SET version = 2 WHERE id = 1"
+                )
 
     @staticmethod
     def _ensure_device(
@@ -364,6 +385,124 @@ class Database:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def _expire_payment(
+        connection: sqlite3.Connection, token: str, now_us: int
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE payments SET status = 'expired'
+            WHERE token = ? AND status = 'pending' AND expires_at_us <= ?
+            """,
+            (token, now_us),
+        )
+
+    def create_payment(
+        self,
+        *,
+        token: str,
+        site_id: str,
+        device_id: str,
+        operation_id: int,
+        plate_number: str,
+        amount_cents: int,
+        now_us: int,
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
+        if not token or operation_id <= 0 or amount_cents <= 0 or now_us <= 0:
+            raise ValueError("支付订单参数无效")
+        expires_at_us = now_us + ttl_seconds * 1_000_000
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM payments
+                WHERE site_id = ? AND device_id = ? AND operation_id = ?
+                """,
+                (site_id, device_id, operation_id),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["plate_number"] != plate_number
+                    or existing["amount_cents"] != amount_cents
+                ):
+                    raise ValueError("同一 operation_id 的支付信息不一致")
+                self._expire_payment(connection, existing["token"], now_us)
+                existing = connection.execute(
+                    "SELECT * FROM payments WHERE token = ?",
+                    (existing["token"],),
+                ).fetchone()
+                assert existing is not None
+                if existing["status"] != "expired":
+                    return dict(existing)
+                connection.execute(
+                    """
+                    UPDATE payments SET token = ?, status = 'pending',
+                        created_at_us = ?, expires_at_us = ?, paid_at_us = NULL
+                    WHERE site_id = ? AND device_id = ? AND operation_id = ?
+                    """,
+                    (
+                        token,
+                        now_us,
+                        expires_at_us,
+                        site_id,
+                        device_id,
+                        operation_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO payments(
+                        token, site_id, device_id, operation_id,
+                        plate_number, amount_cents, status,
+                        created_at_us, expires_at_us
+                    ) VALUES(?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """,
+                    (
+                        token,
+                        site_id,
+                        device_id,
+                        operation_id,
+                        plate_number,
+                        amount_cents,
+                        now_us,
+                        expires_at_us,
+                    ),
+                )
+
+            row = connection.execute(
+                "SELECT * FROM payments WHERE token = ?", (token,)
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def get_payment(self, token: str, now_us: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire_payment(connection, token, now_us)
+            row = connection.execute(
+                "SELECT * FROM payments WHERE token = ?", (token,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def pay(self, token: str, now_us: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire_payment(connection, token, now_us)
+            connection.execute(
+                """
+                UPDATE payments SET status = 'paid', paid_at_us = ?
+                WHERE token = ? AND status = 'pending'
+                """,
+                (now_us, token),
+            )
+            row = connection.execute(
+                "SELECT * FROM payments WHERE token = ?", (token,)
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def overview(self, day_start_us: int, day_end_us: int) -> dict[str, Any]:
         devices = self.list_devices()
